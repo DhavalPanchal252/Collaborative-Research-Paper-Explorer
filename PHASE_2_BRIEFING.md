@@ -17,109 +17,115 @@
 - ✅ React UI (UploadPanel, ChatPanel, ModelSelector)
 
 **What to build (Phase 2):**
-Pick ONE or TWO features below ⬇️
+Implement ONLY ONE feature (see selected option below)
 
 ---
 
-## 🔥 Phase 2 Options (Choose 1-2)
+## 🔴 CRITICAL CONSTRAINTS (READ FIRST)
 
-### **OPTION A: Section-Wise Summary**
+### ⚠️ IMPORTANT: IMPLEMENT ONLY ONE FEATURE
+
+**DO NOT:**
+- ❌ Combine multiple features
+- ❌ Implement all options
+- ❌ Redesign existing UI
+- ❌ Add new frameworks or abstractions
+- ❌ Over-engineer services
+
+**DO:**
+- ✅ Keep implementation minimal
+- ✅ Follow Phase 1 exact patterns
+- ✅ Add only required files
+- ✅ Integrate into existing components
+- ✅ Test with Phase 1 session_id system
+
+### ⚠️ SIMPLICITY RULE
+
+This is an **incremental feature**, not a rewrite.
+- Do NOT redesign existing architecture
+- Do NOT add unnecessary services or abstractions
+- Keep UI changes minimal (only add small new component)
+- Reuse existing patterns (FastAPI router, React component, session management)
+
+### ⚠️ UI CONSTRAINT
+
+- Do NOT redesign the UI
+- Only add a small SummaryPanel component
+- Integrate into existing ChatPanel sidebar (not replace)
+- Keep styling consistent with current theme
+- No layout changes to main App.jsx
+
+---
+
+## ✅ SELECTED FEATURE (LOCKED)
+
+### **→ IMPLEMENT OPTION A: Section-Wise Summary ONLY**
+
+This is your Phase 2 feature. Ignore Options B and C completely.
+
+**Why Option A?**
+- ✅ Clean implementation (2-3 hours)
+- ✅ No new dependencies
+- ✅ High UX value
+- ✅ Works with existing RAG pipeline
+- ✅ Platform for future features
+
+**Do NOT attempt:** Options B or C
+
+---
+
+## 🔥 Phase 2 Options (Reference Only)
+
+### **OPTION A: Section-Wise Summary** ← YOUR FEATURE
 
 **User Story:**
 - User uploads paper
-- UI shows "Extract Sections" button
+- UI shows "Extract Sections" button in sidebar
 - Backend analyzes paper → extracts section names (Abstract, Introduction, Method, Results, etc.)
-- User clicks section → gets summary
+- User clicks section → gets AI summary
 - Chat can reference section (e.g., "Explain the methodology section")
 
 **What to Add:**
 
 1. **Backend Route:** `POST /analyze/sections`
    - Input: `session_id`
-   - Output: `{"sections": [{"name": "Abstract", "page": 1}, {...}]}`
-   - Tech: Regex/heuristics to find section headers in text
+   - Output: `{"sections": [{"name": "Abstract", "start_idx": 0}, {...}]}`
+   - Tech: Regex patterns to find section headers in text
+   - **Fallback:** If section detection fails, use semantic chunk filtering by keywords
 
 2. **Backend Route:** `POST /chat/section/{section_name}`
    - Input: `session_id, section_name`
    - Output: Summary of that section
-   - Tech: Retrieve chunks matching section → build prompt → LLM
+   - Tech: Filter chunks by section → build prompt → LLM generate
 
-3. **Frontend Component:** `SummaryPanel.jsx`
-   - Displays section list with buttons
-   - Shows section summary when clicked
-   - Integrates into ChatPanel sidebar
+3. **Frontend Component:** `SectionsPanel.jsx`
+   - Small sidebar panel showing section buttons
+   - Clicking section calls backend
+   - Displays section summary below
+   - Integrates into right sidebar of ChatPanel (minimal)
 
-**Implementation Time:** ~2-3 hours  
+**Implementation Time:** 2-3 hours  
 **Complexity:** Medium  
-**Tech Stack:** No new dependencies
+**Tech Stack:** No new dependencies  
+**Files to Create:**
+- `backend/app/routes/sections.py`
+- `backend/app/services/section_analyzer.py` (optional)
+- `frontend/src/components/SectionsPanel.jsx`
+- `frontend/src/api/sections.js`
 
 ---
 
-### **OPTION B: Related Papers Recommendation**
+### **⚠️ OPTIONS B & C (DO NOT IMPLEMENT)**
 
-**User Story:**
-- User uploads paper
-- UI shows "Find Related Papers" button
-- System queries embedding similarity → finds 5 similar papers from arXiv
-- Displays with links + similarity score
+These are reference options only. **DO NOT build these.**
 
-**What to Add:**
+**OPTION B: Related Papers Recommendation** ❌ SKIP THIS
+- Status: Not selected for Phase 2
 
-1. **Backend Route:** `POST /related`
-   - Input: `session_id`
-   - Output: `{"related": [{"title": "...", "arxiv_id": "...", "similarity": 0.87, "url": "..."}, {...}]}`
-   - Tech: Embed paper → search arXiv embeddings (pre-computed)
+**OPTION C: Smart Annotations** ❌ SKIP THIS  
+- Status: Not selected for Phase 2
 
-2. **Data Preparation:**
-   - Need pre-embedded arXiv papers corpus (or API)
-   - Option 1: Use arXiv API (free, no auth)
-   - Option 2: Pre-compute embeddings for top 1000 papers
-   - Option 3: Call external API (but slower)
-
-3. **Frontend Component:** `RelatedPapers.jsx`
-   - Shows grid/list of related papers
-   - Click → open arXiv link in new tab
-   - Display similarity scores
-
-**Implementation Time:** ~3-4 hours  
-**Complexity:** Medium-High  
-**New Dependencies:** `arxiv` (Python), `requests`
-
----
-
-### **OPTION C: Smart Annotations (🔥 STRONG USP)**
-
-**User Story:**
-- User reads paper in chat
-- Selects text → clicks "Annotate"
-- Popup allows inline comment
-- Comments saved with highlights
-- Can export annotations as notes
-
-**What to Add:**
-
-1. **Backend Route:** `POST /annotate`
-   - Input: `session_id, text, comment, highlight_color`
-   - Output: `{"annotation_id": "...", "timestamp": "..."}`
-   - Tech: Store in dictionary (or DB in Phase 3)
-
-2. **Backend Route:** `GET /annotations/{session_id}`
-   - Output: List of all annotations for session
-   - Tech: Return from stored dict
-
-3. **Backend Route:** `GET /export/notes/{session_id}`
-   - Output: Markdown file with highlights + comments
-   - Tech: Generate markdown, return as download
-
-4. **Frontend Feature:**
-   - Highlight color selector
-   - Text selection → annotation popup
-   - Sidebar showing all annotations
-   - Export button
-
-**Implementation Time:** ~4-5 hours  
-**Complexity:** High  
-**New Dependencies:** None (use browser Selection API)
+**Focus entirely on Option A only.**
 
 ---
 
@@ -296,6 +302,47 @@ index, embeddings = create_vector_store(chunks)
 
 ---
 
+## 🚨 WHAT CLAUDE MIGHT TRY TO DO (AND SHOULD NOT)
+
+**Common over-engineering patterns to BLOCK:**
+
+### ❌ DO NOT DO THIS:
+
+1. **Create a new service layer called `SectionService`**
+   - Just put logic directly in the route file
+   - No need for abstraction
+
+2. **Redesign ChatPanel to add tabs/accordion**
+   - Just add a small button → sidebar panel
+   - Keep existing ChatPanel intact
+
+3. **Add database models for caching sections**
+   - Store in session dictionary (`_sessions[session_id]["sections"]`)
+   - No persistence needed
+
+4. **Create TypeScript interfaces or complex schemas**
+   - Use simple Pydantic models
+   - Keep it minimal
+
+5. **Add multiple new files and folder structures**
+   - Follow Phase 1 pattern: one route file + optional service file
+   - That's it
+
+6. **Build a section editor, section deletion system, etc.**
+   - Just: detect → display → summarize
+   - Nothing more
+
+### ✅ DO THIS INSTEAD:
+
+- Add 2-3 new files maximum
+- Reuse existing LLM pipeline (don't reinvent)
+- Route → (optional service) → response
+- One new React component only
+- Keep styling consistent
+- Minimum viable implementation
+
+---
+
 ## 📞 Important Notes
 
 1. **Use existing session_id system** — don't create new sessions
@@ -321,18 +368,33 @@ See `PHASE_1_FILE_STRUCTURE.md` for:
 
 **Share this document + `PHASE_1_FILE_STRUCTURE.md` with Claude AI**
 
-Then request:
+Then request EXACTLY like this:
 ```
-"Implement Phase 2 Option [A/B/C].
+"Implement Phase 2 Option A (Section-Wise Summary) for my research paper explorer.
+
+CONSTRAINTS (VERY IMPORTANT):
+- Implement ONLY Option A
+- Do NOT implement Options B or C
+- Do NOT redesign UI or architecture
+- Do NOT add unnecessary services
+- Keep implementation minimal and aligned with Phase 1
 
 Use the attached PHASE_1_FILE_STRUCTURE.md as reference.
 Follow all patterns from Phase 1.
 Maintain session_id architecture.
-Create files: backend/app/routes/..., frontend/src/api/..., frontend/src/components/..."
+Create only these files:
+  - backend/app/routes/sections.py
+  - backend/app/services/section_analyzer.py (if needed)
+  - frontend/src/api/sections.js
+  - frontend/src/components/SectionsPanel.jsx
+
+Do NOT redesign ChatPanel or App.jsx layout.
+Just add SectionsPanel as a small sidebar component."
 ```
 
 ---
 
 **Document Generated:** March 27, 2026  
 **Phase 1:** ✅ Complete  
-**Next Step:** Pick Feature + Brief Claude AI
+**Phase 2 Feature:** ✅ LOCKED (Option A)  
+**Ready to Brief Claude:** ✅ Yes
