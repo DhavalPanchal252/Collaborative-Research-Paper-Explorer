@@ -10,14 +10,53 @@ import NotesPanel from "./components/sidebar/NotesPanel";
 import { uploadPDF } from "./api/upload";
 import { explainSelection } from "./api/explain";
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Static section data (replace with backend-driven data when ready)
+// Shape: { title, page, subsections?: [{ title, page }] }
+// ─────────────────────────────────────────────────────────────────────────────
+const DEFAULT_SECTIONS = [
+  { title: "Abstract", page: 1 },
+  {
+    title: "Introduction",
+    page: 1,
+    subsections: [
+      { title: "Background",     page: 2 },
+      { title: "Contributions",  page: 3 },
+    ],
+  },
+  {
+    title: "Model Architecture",
+    page: 5,
+    subsections: [
+      { title: "Encoder & Decoder",   page: 6 },
+      { title: "Attention",           page: 7 },
+      { title: "Multi-Head Attention", page: 8 },
+    ],
+  },
+  { title: "Training", page: 9 },
+  { title: "Results",  page: 10 },
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [uploadedFile, setUploadedFile] = useState(null);
-  const [uploadMeta, setUploadMeta] = useState(null);
-  const [model, setModel] = useState("groq");
-  const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState(null);
+  // ── Upload / paper state ──────────────────────────────────────────────────
+  const [uploadedFile,  setUploadedFile]  = useState(null);
+  const [uploadMeta,    setUploadMeta]    = useState(null);
+  const [model,         setModel]         = useState("groq");
+  const [uploading,     setUploading]     = useState(false);
+  const [uploadError,   setUploadError]   = useState(null);
+
+  // ── Explain feature state ─────────────────────────────────────────────────
   const [explainLoading, setExplainLoading] = useState(false);
-  const [injectMessage, setInjectMessage] = useState(null);
+  const [injectMessage,  setInjectMessage]  = useState(null);
+
+  // ── Navigation state (owned here, NOT inside PDFViewer) ──────────────────
+  const [currentPage,    setCurrentPage]    = useState(1);
+  const [activeSection,  setActiveSection]  = useState(null); // section title string
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Handlers
+  // ─────────────────────────────────────────────────────────────────────────
 
   async function handleUpload(file) {
     setUploading(true);
@@ -27,6 +66,9 @@ export default function App() {
       const meta = await uploadPDF(file);
       setUploadedFile(file);
       setUploadMeta(meta);
+      // Reset navigation for the new paper
+      setCurrentPage(1);
+      setActiveSection(null);
     } catch (err) {
       setUploadError(err.message || "Upload failed. Please try again.");
     } finally {
@@ -40,7 +82,18 @@ export default function App() {
     setUploadMeta(null);
     setUploadError(null);
     setInjectMessage(null);
+    setCurrentPage(1);
+    setActiveSection(null);
   }
+
+  /**
+   * Called by SectionsPanel when user clicks any section or subsection.
+   * @param {{ title: string, page: number }} section
+   */
+  const handleSectionClick = useCallback(({ title, page }) => {
+    setCurrentPage(page);
+    setActiveSection(title);
+  }, []);
 
   const handleExplainRequest = useCallback(
     async (selectedText) => {
@@ -66,8 +119,12 @@ export default function App() {
 
   const hasPaper = !!uploadedFile;
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Render
+  // ─────────────────────────────────────────────────────────────────────────
   return (
     <div className="app-shell">
+
       {/* ── Sidebar ── */}
       <aside className="sidebar">
         <div className="sidebar-logo">
@@ -89,7 +146,17 @@ export default function App() {
 
             <div className="sidebar-section sidebar-section--grow">
               <p className="section-label">SECTIONS</p>
-              <SectionsPanel />
+              {/*
+                Pass sections data, the click handler, and activeSection so
+                the panel can highlight the current context.
+                In a future iteration, `sections` can be fetched from the
+                backend after upload (backend-driven sections).
+              */}
+              <SectionsPanel
+                sections={DEFAULT_SECTIONS}
+                activeSection={activeSection}
+                onSectionClick={handleSectionClick}
+              />
             </div>
 
             <div className="sidebar-section">
@@ -134,8 +201,14 @@ export default function App() {
         {hasPaper ? (
           <>
             <div className="workspace-pdf">
+              {/*
+                PDFViewer is a controlled component:
+                - currentPage comes from App state
+                - it does NOT own page state internally
+              */}
               <PDFViewer
                 file={uploadedFile}
+                currentPage={currentPage}
                 onExplainRequest={handleExplainRequest}
                 explainLoading={explainLoading}
               />

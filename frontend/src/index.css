@@ -802,47 +802,207 @@ textarea { font-family: inherit; font-size: inherit; }
 
 /* ── SectionsPanel ────────────────────────────────────────────────────────── */
 
+/* ─────────────────────────────────────────────────────────────────────────────
+   sections-panel.css  —  Add these rules to your main stylesheet
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* ── Panel container ── */
 .sections-panel {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  overflow-y: auto;
+  max-height: 100%;
+  padding-right: 2px; /* breathing room for scrollbar */
 }
 
+.sections-panel--empty {
+  padding: 8px 0;
+}
+
+.sections-empty-hint {
+  font-size: 11px;
+  color: var(--text-muted, #555);
+  font-style: italic;
+}
+
+/* ── Section group (parent + its subsections) ── */
+.section-group {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Shared item styles (parent & sub) ── */
 .section-item {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 6px;
   width: 100%;
-  padding: 7px 10px;
+  padding: 5px 6px;
+  border-radius: 5px;
   background: transparent;
   border: none;
-  border-radius: 6px;
-  color: #666;
-  font-size: 12px;
-  font-family: inherit;
-  text-align: left;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  text-align: left;
+  transition: background 0.15s ease;
+  color: var(--text-secondary, #aaa);
+  font-size: 12px;
+  line-height: 1.4;
+  user-select: none;
 }
 
 .section-item:hover {
-  background: rgba(255, 255, 255, 0.04);
-  color: #bbb;
+  background: var(--surface-hover, rgba(255,255,255,0.06));
+  color: var(--text-primary, #eee);
 }
 
+/* Active: current section or subsection */
 .section-item--active {
-  background: rgba(255, 165, 0, 0.08);
-  color: #ffa500;
-  font-weight: 500;
+  background: var(--accent-subtle, rgba(234,136,33,0.12));
+  color: var(--accent, #ea8821);
 }
 
+.section-item--active:hover {
+  background: var(--accent-subtle-hover, rgba(234,136,33,0.18));
+}
+
+/* Parent whose child is active — subtle glow */
+.section-item--child-active {
+  color: var(--text-primary, #ddd);
+}
+
+/* ── Subsection row ── */
+.subsection-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: 18px; /* visual indent */
+  margin-top: 1px;
+  margin-bottom: 2px;
+  border-left: 1px solid var(--border-subtle, rgba(255,255,255,0.07));
+  margin-left: 14px;
+}
+
+.section-item--sub {
+  font-size: 11.5px;
+  color: var(--text-muted, #888);
+  padding: 4px 6px;
+}
+
+.section-item--sub.section-item--active {
+  color: var(--accent, #ea8821);
+  background: var(--accent-subtle, rgba(234,136,33,0.10));
+}
+
+/* ── Expand / collapse button ── */
+.section-expand-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted, #777);
+  transition: color 0.15s;
+  border-radius: 3px;
+}
+
+.section-expand-btn:hover {
+  color: var(--text-primary, #eee);
+}
+
+.section-expand-spacer {
+  flex-shrink: 0;
+  display: inline-block;
+  width: 16px;
+}
+
+/* ── Chevron icon ── */
+.section-chevron {
+  display: inline-block;
+  font-size: 14px;
+  line-height: 1;
+  transition: transform 0.2s ease;
+  transform: rotate(0deg);
+}
+
+.section-chevron--open {
+  transform: rotate(90deg);
+}
+
+/* ── Label button (the clickable text inside parent row) ── */
+.section-label-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+  text-align: left;
+  min-width: 0; /* allow text truncation */
+}
+
+/* ── Dot indicator ── */
 .section-item-dot {
+  flex-shrink: 0;
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: currentColor;
+  background: var(--text-muted, #555);
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.section-item-dot[data-active="true"] {
+  background: var(--accent, #ea8821);
+  box-shadow: 0 0 5px var(--accent, #ea8821);
+}
+
+/* ── Title text ── */
+.section-item-title {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Page number badge ── */
+.section-item-page {
   flex-shrink: 0;
-  opacity: 0.6;
+  font-size: 10px;
+  color: var(--text-muted, #666);
+  margin-left: auto;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+.section-item:hover .section-item-page {
+  opacity: 1;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   PDF Toolbar update — page indicator
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.pdf-toolbar-meta {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-muted, #888);
+  gap: 4px;
+}
+
+.pdf-toolbar-pages strong {
+  color: var(--text-primary, #ddd);
+  font-weight: 600;
 }
 
 /* ── NotesPanel ───────────────────────────────────────────────────────────── */

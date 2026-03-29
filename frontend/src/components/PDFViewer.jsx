@@ -4,15 +4,12 @@ import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 
-// Required: point pdfjs to its worker
-// pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
-
-// ✅ REPLACE WITH THIS (Vite resolves it from node_modules directly)
-// ✅ Correct for react-pdf v10 + Vite
+// ✅ Correct worker setup for react-pdf v10 + Vite
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.min.mjs",
   import.meta.url
 ).toString();
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SelectionTooltip
 // ─────────────────────────────────────────────────────────────────────────────
@@ -23,13 +20,13 @@ function SelectionTooltip({ position, onExplain, onDismiss, loading }) {
     <div
       className="selection-tooltip"
       style={{
-        position: "fixed",
-        left: position.x,
-        top: position.y,
+        position:  "fixed",
+        left:      position.x,
+        top:       position.y,
         transform: "translateX(-50%) translateY(-110%)",
-        zIndex: 1000,
+        zIndex:    1000,
       }}
-      // Prevent mousedown inside tooltip from clearing selection
+      // Prevent mousedown inside tooltip from clearing the selection
       onMouseDown={(e) => e.preventDefault()}
     >
       <button
@@ -61,18 +58,34 @@ function SelectionTooltip({ position, onExplain, onDismiss, loading }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PDFViewer
+// PDFViewer  —  CONTROLLED COMPONENT
+//
+// Props:
+//   file             – File object (from upload)
+//   currentPage      – number  (controlled by App.jsx — do NOT manage internally)
+//   onExplainRequest – (selectedText: string) => void
+//   explainLoading   – boolean
 // ─────────────────────────────────────────────────────────────────────────────
-export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
-  const [numPages, setNumPages] = useState(null);
-  const [loadError, setLoadError] = useState(null);
-  const [tooltipPos, setTooltipPos] = useState(null);
+export default function PDFViewer({ file, currentPage = 1, onExplainRequest, explainLoading }) {
+  const [numPages,     setNumPages]    = useState(null);
+  const [loadError,    setLoadError]   = useState(null);
+  const [tooltipPos,   setTooltipPos]  = useState(null);
   const [selectedText, setSelectedText] = useState("");
-  const containerRef = useRef(null);
 
-  // ── Track text selection ──────────────────────────────────────────────────
+  const containerRef   = useRef(null);
+  // Map from page number → DOM ref so we can imperatively scroll to a page
+  const pageRefs       = useRef({});
+
+  // ── Scroll to page when currentPage changes ───────────────────────────────
+  useEffect(() => {
+    const target = pageRefs.current[currentPage];
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [currentPage]);
+
+  // ── Text selection handling ───────────────────────────────────────────────
   const handleMouseUp = useCallback(() => {
-    // Small delay so the selection is fully committed
     setTimeout(() => {
       const selection = window.getSelection();
       const text = selection?.toString().trim();
@@ -83,7 +96,7 @@ export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
         return;
       }
 
-      // Guard: selection must be within the PDF container
+      // Guard: selection must be inside the PDF container
       const range = selection.getRangeAt(0);
       if (!containerRef.current?.contains(range.commonAncestorContainer)) {
         return;
@@ -111,7 +124,7 @@ export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
     return () => document.removeEventListener("mousedown", handleMouseDown);
   }, [handleMouseDown]);
 
-  // ── Dismiss tooltip when explainLoading turns false (answer delivered) ─────
+  // Dismiss tooltip after explanation is delivered
   useEffect(() => {
     if (!explainLoading) {
       setTooltipPos(null);
@@ -147,19 +160,24 @@ export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
 
   return (
     <div className="pdf-viewer" ref={containerRef}>
-      {/* Toolbar */}
+
+      {/* ── Toolbar ── */}
       <div className="pdf-toolbar">
         <span className="pdf-toolbar-name">
           <span className="pdf-toolbar-icon">📄</span>
           {file.name}
         </span>
-        {numPages && (
-          <span className="pdf-toolbar-pages">{numPages} pages</span>
-        )}
+        <span className="pdf-toolbar-meta">
+          {numPages && (
+            <span className="pdf-toolbar-pages">
+              Page <strong>{currentPage}</strong> / {numPages}
+            </span>
+          )}
+        </span>
         <span className="pdf-hint">Select text → Explain</span>
       </div>
 
-      {/* Document */}
+      {/* ── Document ── */}
       <div className="pdf-scroll-area" onMouseUp={handleMouseUp}>
         {loadError ? (
           <div className="pdf-load-error">{loadError}</div>
@@ -175,21 +193,35 @@ export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
               </div>
             }
           >
-            {Array.from({ length: numPages ?? 0 }, (_, i) => (
-              <Page
-                key={`page_${i + 1}`}
-                pageNumber={i + 1}
-                width={Math.min(containerRef.current?.clientWidth - 48 || 680, 900)}
-                className="pdf-page"
-                renderTextLayer={true}
-                renderAnnotationLayer={false}
-              />
-            ))}
+            {Array.from({ length: numPages ?? 0 }, (_, i) => {
+              const pageNum = i + 1;
+              return (
+                /*
+                 * Each page is wrapped in a div with a ref stored in pageRefs.
+                 * When currentPage changes, the useEffect above scrolls to it.
+                 */
+                <div
+                  key={`page_${pageNum}`}
+                  ref={(el) => { pageRefs.current[pageNum] = el; }}
+                >
+                  <Page
+                    pageNumber={pageNum}
+                    width={Math.min(
+                      (containerRef.current?.clientWidth ?? 728) - 48,
+                      900
+                    )}
+                    className="pdf-page"
+                    renderTextLayer={true}
+                    renderAnnotationLayer={false}
+                  />
+                </div>
+              );
+            })}
           </Document>
         )}
       </div>
 
-      {/* Floating tooltip */}
+      {/* ── Floating tooltip ── */}
       <SelectionTooltip
         position={tooltipPos}
         onExplain={handleExplain}
