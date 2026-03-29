@@ -15,7 +15,7 @@
   - Generates new `session_id` via `uuid.uuid4()` 
   - Returns `session_id` in JSON response (with fix: "session_id" not "sesson_id")
   - Stores chunks & index in session: `session["chunks"]` & `session["index"]`
-
+  
 **Expected Behavior:**
 - User uploads PDF → Backend generates `session_id` → Returns in response
 - Frontend stores `session_id` in localStorage

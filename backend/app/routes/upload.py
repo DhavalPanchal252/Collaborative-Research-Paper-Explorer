@@ -192,4 +192,3 @@ async def upload_pdf(file: UploadFile = File(...),session_id: str | None = None)
             "file_size_bytes": len(content),
         },
     )
-    

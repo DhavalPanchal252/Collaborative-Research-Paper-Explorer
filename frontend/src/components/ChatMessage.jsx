@@ -1,21 +1,32 @@
-export default function ChatMessage({ role, content }) {
+export default function ChatMessage({ role, content, source }) {
   const isUser = role === "user";
+  const isAssistant = role === "assistant";
+  const isExplain = source === "explain";
 
   return (
     <div className={`chat-message chat-message--${role}`}>
       <div className={`msg-avatar ${isUser ? "msg-avatar--user" : "msg-avatar--ai"}`}>
         {isUser ? "U" : "◈"}
       </div>
+
       <div className={`msg-bubble ${isUser ? "msg-bubble--user" : "msg-bubble--ai"}`}>
+        
+        {/* 🔥 NEW: Explain Badge */}
+        {isExplain && isAssistant && (
+          <div className="msg-explain-badge">
+            ✦ Selection Explanation
+          </div>
+        )}
+
         <FormattedContent content={content} />
       </div>
     </div>
   );
 }
 
-// Lightweight formatter: bold, inline code, code blocks, line breaks
+
+// ✅ KEEP YOUR EXISTING FORMATTER (VERY GOOD)
 function FormattedContent({ content }) {
-  // Split into code-block segments vs normal text
   const parts = content.split(/(```[\s\S]*?```)/g);
 
   return (
@@ -26,7 +37,6 @@ function FormattedContent({ content }) {
           return <pre key={i} className="msg-code-block"><code>{code}</code></pre>;
         }
 
-        // Process inline: **bold**, `code`, newlines
         const lines = part.split("\n");
         return (
           <span key={i}>

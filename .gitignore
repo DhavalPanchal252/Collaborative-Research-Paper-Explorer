@@ -52,3 +52,6 @@ Thumbs.db
 # Project specific
 uploaded_papers/
 *.pdf
+
+demo/
+research-explorer.html

@@ -460,3 +460,54 @@ def build_prompt(
     sections.append(rules_block)  # Rules at end
     
     return "\n\n".join(sections)
+
+"""
+ADDITION TO llm_utils.py
+========================
+Add this function at the bottom of your existing llm_utils.py file,
+after the build_prompt() function (Section 6).
+
+No existing code needs to be modified — this is a pure extension.
+"""
+
+
+# ============================================================================
+# SECTION 7 — EXPLAIN PROMPT BUILDER (for text-selection feature)
+# ============================================================================
+
+def build_explain_prompt(selected_text: str) -> str:
+    """
+    Build a focused prompt for explaining a passage of selected PDF text.
+
+    Design goals
+    ------------
+    * Plain English — no jargon unless the jargon is explained.
+    * Concise but not shallow — 3-6 sentences is the sweet spot.
+    * Analogy-first for abstract/technical content.
+    * Never invents facts; explains based solely on the provided passage.
+
+    Parameters
+    ----------
+    selected_text : str
+        Raw text selected by the user in the PDF viewer.
+
+    Returns
+    -------
+    str
+        A fully formed prompt ready for any chat-completion backend.
+    """
+    return (
+        f"A user has highlighted the following passage from a research paper:\n\n"
+        f'"""\n{selected_text.strip()}\n"""\n\n'
+        "Your task is to explain this passage in simple, plain English.\n\n"
+        "RULES:\n"
+        "• Assume the reader is intelligent but NOT a domain expert.\n"
+        "• Start directly with the explanation — no preamble like 'This passage says...'.\n"
+        "• Use an analogy if the concept is abstract or mathematical.\n"
+        "• Keep it concise: 3–6 sentences is ideal. Never exceed 8.\n"
+        "• If the passage contains an equation or formula, describe what it computes, "
+        "not just what the symbols mean.\n"
+        "• Do NOT copy the passage back verbatim.\n"
+        "• Do NOT comment on writing style or the authors.\n"
+        "OUTPUT: Plain prose, no bullet points, no headers."
+    )

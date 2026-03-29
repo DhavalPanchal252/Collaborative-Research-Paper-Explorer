@@ -1,3 +1,7 @@
+// src/components/ChatPanel.jsx
+// Extended to accept injected explain messages from the PDF selection flow.
+// All original functionality is preserved — this is a minimal extension only.
+
 import { useState, useRef, useEffect } from "react";
 import { sendQuestion } from "../api/chat";
 import ChatMessage from "./ChatMessage";
@@ -9,7 +13,12 @@ const SUGGESTIONS = [
   "What are the limitations?",
 ];
 
-export default function ChatPanel({ model, paperName }) {
+export default function ChatPanel({
+  model,
+  paperName,
+  injectMessage,      // { question: string, answer: string } | null
+  onInjectConsumed,   // () => void — called after injection is processed
+}) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -17,10 +26,29 @@ export default function ChatPanel({ model, paperName }) {
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
 
+  // ── Scroll to bottom whenever messages change ─────────────────────────────
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
+  // ── Consume injected explain message ─────────────────────────────────────
+  // When App.jsx passes a new { question, answer } pair from the explain
+  // endpoint, we push both messages into the local history and signal back
+  // that we've consumed it so App clears the ref.
+  useEffect(() => {
+    if (!injectMessage) return;
+
+    setMessages((prev) => [
+      ...prev,
+      // User "question" — styled with the explain badge
+      { role: "user",      content: injectMessage.question, source: "explain" },
+      { role: "assistant", content: injectMessage.answer,   source: "explain" },
+    ]);
+
+    onInjectConsumed?.();
+  }, [injectMessage, onInjectConsumed]);
+
+  // ── Normal chat send ──────────────────────────────────────────────────────
   async function handleSend(question) {
     const text = (question ?? input).trim();
     if (!text || loading) return;
@@ -57,7 +85,9 @@ export default function ChatPanel({ model, paperName }) {
         <div className="chat-header-left">
           <span className="chat-paper-icon">📄</span>
           <span className="chat-paper-name" title={paperName}>
-            {paperName.length > 50 ? paperName.slice(0, 47) + "..." : paperName}
+            {paperName.length > 40
+              ? paperName.slice(0, 37) + "..."
+              : paperName}
           </span>
         </div>
         <span className={`chat-model-pill chat-model-pill--${model}`}>
@@ -72,7 +102,11 @@ export default function ChatPanel({ model, paperName }) {
             <p className="suggestions-label">Try asking…</p>
             <div className="suggestions-grid">
               {SUGGESTIONS.map((s) => (
-                <button key={s} className="suggestion-chip" onClick={() => handleSend(s)}>
+                <button
+                  key={s}
+                  className="suggestion-chip"
+                  onClick={() => handleSend(s)}
+                >
                   {s}
                 </button>
               ))}
@@ -81,7 +115,13 @@ export default function ChatPanel({ model, paperName }) {
         )}
 
         {messages.map((msg, i) => (
-          <ChatMessage key={i} role={msg.role} content={msg.content} />
+          <ChatMessage
+            key={i}
+            role={msg.role}
+            content={msg.content}
+            // Optional: pass source so ChatMessage can badge explain messages
+            source={msg.source}
+          />
         ))}
 
         {loading && (
