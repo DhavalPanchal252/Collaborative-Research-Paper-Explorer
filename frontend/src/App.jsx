@@ -4,6 +4,9 @@ import UploadPanel from "./components/UploadPanel";
 import ChatPanel from "./components/ChatPanel";
 import PDFViewer from "./components/PDFViewer";
 import ModelSelector from "./components/ModelSelector";
+import PaperInfo from "./components/sidebar/PaperInfo";
+import SectionsPanel from "./components/sidebar/SectionsPanel";
+import NotesPanel from "./components/sidebar/NotesPanel";
 import { uploadPDF } from "./api/upload";
 import { explainSelection } from "./api/explain";
 
@@ -13,10 +16,8 @@ export default function App() {
   const [model, setModel] = useState("groq");
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState(null);
-
-  // ── Explain state: injected message for ChatPanel ─────────────────────────
   const [explainLoading, setExplainLoading] = useState(false);
-  const [injectMessage, setInjectMessage] = useState(null); // { question, answer }
+  const [injectMessage, setInjectMessage] = useState(null);
 
   async function handleUpload(file) {
     setUploading(true);
@@ -41,19 +42,13 @@ export default function App() {
     setInjectMessage(null);
   }
 
-  // ── Called by PDFViewer when user clicks "Explain" ───────────────────────
   const handleExplainRequest = useCallback(
     async (selectedText) => {
       if (!selectedText || explainLoading) return;
-
       setExplainLoading(true);
-
-      // Immediately show user's selected text as a "question" in chat
       const userQuestion = `✦ Explain: "${selectedText.slice(0, 120)}${selectedText.length > 120 ? "…" : ""}"`;
-
       try {
         const { explanation } = await explainSelection(selectedText, model);
-        // Signal ChatPanel to display this exchange
         setInjectMessage({ question: userQuestion, answer: explanation });
       } catch (err) {
         setInjectMessage({
@@ -67,10 +62,7 @@ export default function App() {
     [model, explainLoading]
   );
 
-  // After ChatPanel consumes the injected message, clear it
-  const handleInjectConsumed = useCallback(() => {
-    setInjectMessage(null);
-  }, []);
+  const handleInjectConsumed = useCallback(() => setInjectMessage(null), []);
 
   const hasPaper = !!uploadedFile;
 
@@ -80,27 +72,52 @@ export default function App() {
       <aside className="sidebar">
         <div className="sidebar-logo">
           <span className="logo-icon">◈</span>
-          <span className="logo-text">
-            Arxiv<em>Mind</em>
-          </span>
+          <span className="logo-text">Arxiv<em>Mind</em></span>
         </div>
 
-        <div className="sidebar-section">
-          <p className="section-label">PAPER</p>
-          <UploadPanel
-            onUpload={handleUpload}
-            uploading={uploading}
-            uploadedFile={uploadedFile}
-            uploadMeta={uploadMeta}
-            error={uploadError}
-            onReset={handleReset}
-          />
-        </div>
+        {hasPaper ? (
+          /* ─── POST-UPLOAD: Research panel ─── */
+          <>
+            <div className="sidebar-section">
+              <p className="section-label">PAPER</p>
+              <PaperInfo
+                uploadedFile={uploadedFile}
+                uploadMeta={uploadMeta}
+                onReset={handleReset}
+              />
+            </div>
 
-        <div className="sidebar-section">
-          <p className="section-label">MODEL</p>
-          <ModelSelector model={model} onChange={setModel} />
-        </div>
+            <div className="sidebar-section sidebar-section--grow">
+              <p className="section-label">SECTIONS</p>
+              <SectionsPanel />
+            </div>
+
+            <div className="sidebar-section">
+              <p className="section-label">NOTES</p>
+              <NotesPanel />
+            </div>
+          </>
+        ) : (
+          /* ─── PRE-UPLOAD: Upload + model ─── */
+          <>
+            <div className="sidebar-section">
+              <p className="section-label">PAPER</p>
+              <UploadPanel
+                onUpload={handleUpload}
+                uploading={uploading}
+                uploadedFile={uploadedFile}
+                uploadMeta={uploadMeta}
+                error={uploadError}
+                onReset={handleReset}
+              />
+            </div>
+
+            <div className="sidebar-section">
+              <p className="section-label">MODEL</p>
+              <ModelSelector model={model} onChange={setModel} />
+            </div>
+          </>
+        )}
 
         <div className="sidebar-footer">
           <span className="status-dot" data-ready={hasPaper} />
@@ -116,7 +133,6 @@ export default function App() {
       <div className="workspace">
         {hasPaper ? (
           <>
-            {/* PDF Viewer — 65% */}
             <div className="workspace-pdf">
               <PDFViewer
                 file={uploadedFile}
@@ -124,8 +140,6 @@ export default function App() {
                 explainLoading={explainLoading}
               />
             </div>
-
-            {/* Chat Panel — 35% */}
             <div className="workspace-chat">
               <ChatPanel
                 model={model}
@@ -148,10 +162,7 @@ function EmptyState() {
     <div className="empty-state">
       <div className="empty-glyph">◈</div>
       <h2>Upload a research paper to begin</h2>
-      <p>
-        Ask questions, extract insights, and explore ideas — all powered by
-        your chosen LLM.
-      </p>
+      <p>Ask questions, extract insights, and explore ideas — all powered by your chosen LLM.</p>
       <ul className="empty-hints">
         <li>→ Summarise the methodology</li>
         <li>→ Explain the key findings</li>
