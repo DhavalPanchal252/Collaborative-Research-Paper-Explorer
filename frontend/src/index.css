@@ -1194,3 +1194,38 @@ textarea { font-family: inherit; font-size: inherit; }
 .pdf-page-info-total {
   color: var(--text-3);
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   PHASE 2: HIGHLIGHT OVERLAY — append to bottom of index.css
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * The highlight layer sits inside .pdf-scroll-area (position:relative).
+ * It covers the full scrollable canvas — including content taller than
+ * the viewport — so highlights remain in the right place when scrolling.
+ *
+ * pointer-events:none on the layer and each rect means the overlay never
+ * intercepts mouse events (selection, clicking, etc. still work normally).
+ */
+.pdf-highlight-layer {
+  position: absolute;
+  inset: 0;                  /* top:0 right:0 bottom:0 left:0 */
+  pointer-events: none;
+  z-index: 10;               /* above page canvases, below tooltip (z:1000) */
+}
+
+.pdf-highlight {
+  position: absolute;
+  background: rgba(255, 235, 120, 0.35);
+  border-radius: 2px;
+  pointer-events: none;
+  /* Thin warm outline makes overlapping rects look intentional */
+  box-shadow: 0 0 0 1px rgba(255, 200, 50, 0.25);
+  /* Smooth in on creation */
+  animation: highlight-in 120ms ease-out both;
+}
+
+@keyframes highlight-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
