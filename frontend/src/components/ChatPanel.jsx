@@ -106,7 +106,7 @@ export default function ChatPanel({
 
         {messages.map((msg, i) => (
           <ChatMessage
-            key={i}
+            key={`${msg.role}-${i}-${msg.highlightId ?? "none"}`}
             role={msg.role}
             content={msg.content}
             source={msg.source}
