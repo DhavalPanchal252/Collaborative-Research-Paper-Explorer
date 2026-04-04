@@ -1,6 +1,6 @@
 // src/components/PDFViewer.jsx
-// Phase 2: Text Highlight System
-// Overlay-based highlight rendering — does NOT touch the PDF text layer.
+// Phase 3: Annotation System — Notes + Interaction Layer
+// Highlights are now interactive entities with metadata.
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
@@ -20,24 +20,155 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
 let _uid = 0;
 function uid() { return ++_uid; }
 
-/**
- * Convert a DOMRect (viewport-relative) to coordinates relative to
- * scrollArea's top-left corner, accounting for scroll position.
- *
- * Why scrollArea and not containerRef?
- *   .pdf-viewer is flex-column with no position:relative — absolute children
- *   escape it. .pdf-scroll-area is where `position:relative` is set (via CSS
- *   addition below), and its scrollTop must be added back because
- *   getBoundingClientRect() gives viewport coords, not document coords.
- */
 function toScrollAreaCoords(domRect, scrollAreaEl) {
   const areaRect = scrollAreaEl.getBoundingClientRect();
   return {
-    x:      domRect.left   - areaRect.left + scrollAreaEl.scrollLeft,
-    y:      domRect.top    - areaRect.top  + scrollAreaEl.scrollTop,
+    x:      domRect.left  - areaRect.left + scrollAreaEl.scrollLeft,
+    y:      domRect.top   - areaRect.top  + scrollAreaEl.scrollTop,
     width:  domRect.width,
     height: domRect.height,
   };
+}
+
+const MODE_CURSOR = {
+  select:    "text",
+  highlight: "text",
+  annotate:  "crosshair",
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AnnotationPopup
+// Appears at fixed (clientX, clientY) of the click that opened it.
+// Closes on: outside click, save, delete, X button.
+// ─────────────────────────────────────────────────────────────────────────────
+function AnnotationPopup({ highlight, onSave, onDelete, onClose }) {
+  const [note, setNote]     = useState(highlight.note ?? "");
+  const popupRef            = useRef(null);
+  const textareaRef         = useRef(null);
+
+  // Auto-focus textarea on open
+  useEffect(() => { textareaRef.current?.focus(); }, []);
+
+  // Close on outside click
+  useEffect(() => {
+    function onMouseDown(e) {
+      if (popupRef.current && !popupRef.current.contains(e.target)) {
+        onClose();
+      }
+    }
+    // Slight delay so the click that opened the popup doesn't immediately close it
+    const t = setTimeout(() => document.addEventListener("mousedown", onMouseDown), 10);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener("mousedown", onMouseDown);
+    };
+  }, [onClose]);
+
+  // Compute safe popup position — clamp to viewport edges
+  const px = Math.min(highlight.position.x, window.innerWidth  - 300);
+  const py = Math.min(highlight.position.y, window.innerHeight - 220);
+
+  function handleSave() {
+    if (!note.trim()) return;  // 🛑 prevent empty save
+
+    onSave(highlight.id, note);
+    onClose();
+  }
+
+  function handleDelete() {
+    onDelete(highlight.id);
+    // onClose is called inside handleDeleteHighlight
+  }
+
+  return (
+    <div
+      ref={popupRef}
+      className="annotation-popup"
+      style={{ left: px, top: py }}
+      // Prevent any click inside popup from bubbling to the PDF layer
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {/* Header */}
+      <div className="annotation-popup-header">
+        <span className="annotation-popup-label">✦ Note</span>
+        <button
+          className="annotation-popup-close"
+          onClick={onClose}
+          aria-label="Close"
+        >✕</button>
+      </div>
+
+      {/* Selected text preview */}
+      <p className="annotation-popup-quote">
+        "{highlight.text.length > 80
+          ? highlight.text.slice(0, 80) + "…"
+          : highlight.text}"
+      </p>
+
+      {/* Note textarea */}
+      <textarea
+        ref={textareaRef}
+        className="annotation-popup-textarea"
+        placeholder="Add a note…"
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        rows={4}
+      />
+
+      {/* Actions */}
+      <div className="annotation-popup-actions">
+        <button
+          className="annotation-btn annotation-btn--delete"
+          onClick={handleDelete}
+        >
+          Delete
+        </button>
+        <button
+          className="annotation-btn annotation-btn--save"
+          onClick={handleSave}
+        >
+          Save note
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HighlightLayer — Phase 3: highlights are clickable; annotated ones differ
+// ─────────────────────────────────────────────────────────────────────────────
+function HighlightLayer({ highlights, onHighlightClick, mode }) {
+  if (!highlights.length) return null;
+
+  // Highlights are only clickable when NOT in highlight/annotate capture mode
+  const interactive = mode === "select";
+
+  return (
+    <div className="pdf-highlight-layer" aria-hidden="true">
+      {highlights.map((h) =>
+        h.rects.map((rect, ri) => (
+          <div
+            key={`${h.id}-${ri}`}
+            className={`pdf-highlight${h.note ? " pdf-highlight--noted" : ""}`}
+            style={{
+              left:          rect.x,
+              top:           rect.y,
+              width:         rect.width,
+              height:        rect.height,
+              // Only first rect of each highlight is the click target
+              // (avoids duplicate popups for multi-line highlights)
+              pointerEvents: interactive && ri === 0 ? "auto" : "none",
+              cursor:        interactive && ri === 0 ? "pointer" : "default",
+            }}
+            onClick={interactive && ri === 0
+              ? (e) => { e.stopPropagation(); onHighlightClick(e, h); }
+              : undefined}
+          />
+        ))
+      )}
+    </div>
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -51,7 +182,7 @@ function SelectionTooltip({ position, onExplain, onDismiss, loading }) {
       style={{
         position: "fixed",
         left: position.x,
-        top: position.y,
+        top:  position.y,
         transform: "translateX(-50%) translateY(-110%)",
         zIndex: 1000,
       }}
@@ -68,40 +199,6 @@ function SelectionTooltip({ position, onExplain, onDismiss, loading }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HighlightLayer — renders all highlight rects inside the scroll container
-// ─────────────────────────────────────────────────────────────────────────────
-function HighlightLayer({ highlights }) {
-  if (!highlights.length) return null;
-  return (
-    <div className="pdf-highlight-layer" aria-hidden="true">
-      {highlights.map((h) =>
-        h.rects.map((rect, ri) => (
-          <div
-            key={`${h.id}-${ri}`}
-            className="pdf-highlight"
-            style={{
-              left:   rect.x,
-              top:    rect.y,
-              width:  rect.width,
-              height: rect.height,
-            }}
-          />
-        ))
-      )}
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Cursor map
-// ─────────────────────────────────────────────────────────────────────────────
-const MODE_CURSOR = {
-  select:    "text",
-  highlight: "text",      // keep text cursor so selection still feels natural
-  annotate:  "crosshair",
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
 // PDFViewer
 // ─────────────────────────────────────────────────────────────────────────────
 export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
@@ -114,54 +211,84 @@ export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
   const [mode, setMode] = useState("select");
   const [zoom, setZoom] = useState(1);
 
-  // Phase 2 — highlight store
-  const [highlights, setHighlights] = useState([]);
+  // Phase 2
+  const [highlights, setHighlights]       = useState([]);
 
-  const containerRef  = useRef(null);   // .pdf-viewer div
-  const scrollAreaRef = useRef(null);   // .pdf-scroll-area div — anchor for overlay
+  // Phase 3
+  const [activeHighlight, setActiveHighlight] = useState(null); // { ...highlight, position:{x,y} }
 
-  // ── Mode change — clear lingering state ──────────────────────────────────
+  const containerRef  = useRef(null);
+  const scrollAreaRef = useRef(null);
+
+  // ── Mode change ──────────────────────────────────────────────────────────
   function handleModeChange(next) {
     setMode(next);
     setTooltipPos(null);
     setSelectedText("");
+    setActiveHighlight(null);
     window.getSelection()?.removeAllRanges();
   }
 
-  // ── PHASE 2: build a highlight from the current browser selection ─────────
-  function captureHighlight(selection) {
+  // ── Phase 3: highlight clicked → open popup ──────────────────────────────
+  function handleHighlightClick(e, highlight) {
+    // 🛑 prevent reopening same popup
+    if (activeHighlight?.id === highlight.id) return;
+
+    setActiveHighlight({
+      ...highlight,
+      position: { x: e.clientX + 12, y: e.clientY + 12 },
+    });
+  }
+
+  // ── Phase 3: save note to highlight ─────────────────────────────────────
+  function handleSaveNote(id, note) {
+    setHighlights((prev) =>
+      prev.map((h) => h.id === id ? { ...h, note } : h)
+    );
+  }
+
+  // ── Phase 3: delete highlight ────────────────────────────────────────────
+  function handleDeleteHighlight(id) {
+    setHighlights((prev) => prev.filter((h) => h.id !== id));
+    setActiveHighlight(null);
+  }
+
+  // ── Phase 2: capture selection → highlight ───────────────────────────────
+  function captureHighlightFromRange(range, text) {
     if (!scrollAreaRef.current) return;
 
-    const range = selection.getRangeAt(0);
     const rawRects = Array.from(range.getClientRects());
 
-    // Filter out degenerate rects (zero-size artifacts from line breaks)
     const rects = rawRects
       .filter((r) => r.width > 1 && r.height > 1)
       .map((r) => toScrollAreaCoords(r, scrollAreaRef.current));
 
     if (!rects.length) return;
 
-    const highlight = {
-      id:   uid(),
-      text: selection.toString().trim(),
-      rects,
-      page: null, // placeholder for now
-    };
+    setHighlights(prev => [
+      ...prev,
+      {
+        id: uid(),
+        text,
+        rects,
+        note: "",
+        createdAt: new Date(),
+      }
+    ]);
 
-    setHighlights(prev => {
-      const exists = prev.some(h => h.text === highlight.text);
-      if (exists) return prev;
-      return [...prev, highlight];
-    });
     window.getSelection()?.removeAllRanges();
   }
 
-  // ── Unified mouseUp — mode-driven ────────────────────────────────────────
+  // ── Unified mouseUp ──────────────────────────────────────────────────────
   const handleMouseUp = useCallback(() => {
+
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+
+    const range = selection.getRangeAt(0).cloneRange(); // ✅ ONLY THIS
+    const text = selection.toString().trim();
+
     setTimeout(() => {
-      const selection = window.getSelection();
-      const text = selection?.toString().trim();
 
       if (mode === "annotate") return;
 
@@ -171,8 +298,7 @@ export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
         return;
       }
 
-      if (!selection || selection.rangeCount === 0) return;
-      const range = selection.getRangeAt(0);
+      // ✅ use cloned range ONLY
       if (!containerRef.current?.contains(range.commonAncestorContainer)) return;
 
       if (mode === "select") {
@@ -181,19 +307,19 @@ export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
         setTooltipPos({ x: rect.left + rect.width / 2, y: rect.top });
 
       } else if (mode === "highlight") {
-        // Phase 2: create and store highlight overlay rects
-        captureHighlight(selection);
+        captureHighlightFromRange(range, text);
       }
-    }, 10);
-  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
-  // captureHighlight is stable across renders (uses ref, not state)
 
-  // ── Click handler — annotate mode only ───────────────────────────────────
+    }, 10);
+
+  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Annotate click ───────────────────────────────────────────────────────
   const handleClick = useCallback((e) => {
     if (mode !== "annotate") return;
     if (e.target.closest(".selection-tooltip")) return;
-    const { clientX: x, clientY: y } = e;
-    console.log("Annotate at:", { x, y });
+    if (e.target.closest(".annotation-popup"))  return;
+    console.log("Annotate at:", { x: e.clientX, y: e.clientY });
   }, [mode]);
 
   // ── Dismiss tooltip on outside mousedown ─────────────────────────────────
@@ -209,7 +335,19 @@ export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
     return () => document.removeEventListener("mousedown", handleMouseDown);
   }, [handleMouseDown]);
 
-  // ── Dismiss tooltip when explain resolves ────────────────────────────────
+  useEffect(() => {
+    function handleScroll() {
+      setActiveHighlight(null);
+    }
+
+    const el = scrollAreaRef.current;
+    if (!el) return;
+
+    el.addEventListener("scroll", handleScroll);
+
+    return () => el.removeEventListener("scroll", handleScroll);
+  }, []);
+
   useEffect(() => {
     if (!explainLoading) {
       setTooltipPos(null);
@@ -247,7 +385,6 @@ export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
   return (
     <div className="pdf-viewer" ref={containerRef}>
 
-      {/* Toolbar */}
       <PDFToolbar
         mode={mode}
         onModeChange={handleModeChange}
@@ -258,7 +395,6 @@ export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
         fileName={file.name}
       />
 
-      {/* Scroll container — position:relative so overlay is anchored here */}
       <div
         ref={scrollAreaRef}
         className="pdf-scroll-area"
@@ -267,7 +403,7 @@ export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
         style={{
           userSelect: mode === "annotate" ? "none" : "text",
           cursor:     MODE_CURSOR[mode],
-          position:   "relative",   // overlay anchor
+          position:   "relative",
         }}
       >
         {loadError ? (
@@ -297,11 +433,25 @@ export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
           </Document>
         )}
 
-        {/* Phase 2: highlight overlay — child of scroll area, shares coordinate space */}
-        <HighlightLayer highlights={highlights} />
+        {/* Phase 2+3: highlight overlay */}
+        <HighlightLayer
+          highlights={highlights}
+          onHighlightClick={handleHighlightClick}
+          mode={mode}
+        />
       </div>
 
-      {/* Tooltip — select mode only */}
+      {/* Phase 3: annotation popup — fixed position, outside scroll area */}
+      {activeHighlight && (
+        <AnnotationPopup
+          highlight={activeHighlight}
+          onSave={handleSaveNote}
+          onDelete={handleDeleteHighlight}
+          onClose={() => setActiveHighlight(null)}
+        />
+      )}
+
+      {/* Select-mode tooltip */}
       {mode === "select" && (
         <SelectionTooltip
           position={tooltipPos}
