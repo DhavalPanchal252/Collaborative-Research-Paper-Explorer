@@ -7,6 +7,7 @@ import ModelSelector from "./components/ModelSelector";
 import PaperInfo from "./components/sidebar/PaperInfo";
 import SectionsPanel from "./components/sidebar/SectionsPanel";
 import NotesPanel from "./components/sidebar/NotesPanel";
+import Header from "./components/layout/Header";
 import { uploadPDF } from "./api/upload";
 import { explainSelection } from "./api/explain";
 
@@ -66,18 +67,24 @@ export default function App() {
 
   const hasPaper = !!uploadedFile;
 
-  return (
-    <div className="app-shell">
-      {/* ── Sidebar ── */}
-      <aside className="sidebar">
-        <div className="sidebar-logo">
-          <span className="logo-icon">◈</span>
-          <span className="logo-text">Arxiv<em>Mind</em></span>
-        </div>
+  /* ─── PAPER LOADED ─────────────────────────────────────────────────────────
+     .app-paper-layout  → flex-column, 100vh
+       <Header />        → full-width, 60px, shrink 0
+       .app-paper-body   → flex:1, flex-row, overflow hidden
+         <aside.sidebar> → 280px fixed, existing styles unchanged
+         .paper-pdf      → flex:1, overflow hidden (PDF viewer)
+         .paper-chat     → 380px fixed, overflow hidden (chat)
+  ─────────────────────────────────────────────────────────────────────────── */
+  if (hasPaper) {
+    return (
+      <div className="app-paper-layout">
 
-        {hasPaper ? (
-          /* ─── POST-UPLOAD: Research panel ─── */
-          <>
+        <Header model={model} uploadMeta={uploadMeta} />
+
+        <div className="app-paper-body">
+
+          {/* ── Column 1: Sidebar ── */}
+          <aside className="sidebar">
             <div className="sidebar-section">
               <p className="section-label">PAPER</p>
               <PaperInfo
@@ -96,62 +103,73 @@ export default function App() {
               <p className="section-label">NOTES</p>
               <NotesPanel />
             </div>
-          </>
-        ) : (
-          /* ─── PRE-UPLOAD: Upload + model ─── */
-          <>
-            <div className="sidebar-section">
-              <p className="section-label">PAPER</p>
-              <UploadPanel
-                onUpload={handleUpload}
-                uploading={uploading}
-                uploadedFile={uploadedFile}
-                uploadMeta={uploadMeta}
-                error={uploadError}
-                onReset={handleReset}
-              />
-            </div>
 
-            <div className="sidebar-section">
-              <p className="section-label">MODEL</p>
-              <ModelSelector model={model} onChange={setModel} />
+            <div className="sidebar-footer">
+              <span className="status-dot" data-ready="true" />
+              <span className="status-text">
+                {uploadMeta?.chunks_created ?? "—"} chunks indexed
+              </span>
             </div>
-          </>
-        )}
+          </aside>
+
+          {/* ── Column 2: PDF Viewer ── */}
+          <div className="paper-pdf">
+            <PDFViewer
+              file={uploadedFile}
+              onExplainRequest={handleExplainRequest}
+              explainLoading={explainLoading}
+            />
+          </div>
+
+          {/* ── Column 3: Chat ── */}
+          <div className="paper-chat">
+            <ChatPanel
+              model={model}
+              paperName={uploadedFile.name}
+              injectMessage={injectMessage}
+              onInjectConsumed={handleInjectConsumed}
+            />
+          </div>
+
+        </div>
+      </div>
+    );
+  }
+
+  /* ─── NO PAPER: original home screen, pixel-perfect unchanged ─── */
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="sidebar-logo">
+          <span className="logo-icon">◈</span>
+          <span className="logo-text">Arxiv<em>Mind</em></span>
+        </div>
+
+        <div className="sidebar-section">
+          <p className="section-label">PAPER</p>
+          <UploadPanel
+            onUpload={handleUpload}
+            uploading={uploading}
+            uploadedFile={uploadedFile}
+            uploadMeta={uploadMeta}
+            error={uploadError}
+            onReset={handleReset}
+          />
+        </div>
+
+        <div className="sidebar-section">
+          <p className="section-label">MODEL</p>
+          <ModelSelector model={model} onChange={setModel} />
+        </div>
 
         <div className="sidebar-footer">
-          <span className="status-dot" data-ready={hasPaper} />
-          <span className="status-text">
-            {hasPaper
-              ? `${uploadMeta?.chunks_created ?? "—"} chunks indexed`
-              : "No paper loaded"}
-          </span>
+          <span className="status-dot" data-ready="false" />
+          <span className="status-text">No paper loaded</span>
         </div>
       </aside>
 
-      {/* ── Main workspace ── */}
       <div className="workspace">
-        {hasPaper ? (
-          <>
-            <div className="workspace-pdf">
-              <PDFViewer
-                file={uploadedFile}
-                onExplainRequest={handleExplainRequest}
-                explainLoading={explainLoading}
-              />
-            </div>
-            <div className="workspace-chat">
-              <ChatPanel
-                model={model}
-                paperName={uploadedFile.name}
-                injectMessage={injectMessage}
-                onInjectConsumed={handleInjectConsumed}
-              />
-            </div>
-          </>
-        ) : (
-          <EmptyState />
-        )}
+        <EmptyState />
       </div>
     </div>
   );

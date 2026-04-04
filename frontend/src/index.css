@@ -899,3 +899,148 @@ textarea { font-family: inherit; font-size: inherit; }
   background: rgba(255, 165, 0, 0.1);
   color: #ffa500;
 }
+/* ─────────────────────────────────────────────────────────────────────────────
+   GLOBAL HEADER LAYOUT — append to bottom of index.css
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* Root wrapper for paper-loaded state: column layout */
+.app-paper-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Body row: sidebar | pdf | chat — fills remaining height below header */
+.app-paper-body {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+  min-height: 0; /* critical: lets flex children shrink below content size */
+}
+
+/* Column 2 — PDF viewer: takes all remaining space between sidebar and chat */
+.paper-pdf {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+}
+
+/* Column 3 — Chat panel: fixed width, full height */
+.paper-chat {
+  flex: 0 0 380px;
+  width: 380px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Global header ──────────────────────────────────────────────────────────── */
+.app-header {
+  width: 100%;
+  height: 60px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  gap: 16px;
+  z-index: 100;
+}
+
+/* LEFT */
+.app-header-left {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-shrink: 0;
+}
+
+.app-header-logo-icon {
+  font-size: 18px;
+  color: var(--accent);
+}
+
+.app-header-logo-text {
+  font-family: var(--font-serif);
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: -0.2px;
+  white-space: nowrap;
+}
+
+.app-header-logo-text em {
+  font-style: italic;
+  font-weight: 300;
+  color: var(--text);
+}
+
+/* CENTER */
+.app-header-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  justify-content: center;
+}
+
+.app-header-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: var(--radius);
+  font-size: 12.5px;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid transparent;
+  transition: color var(--transition), background var(--transition), border-color var(--transition);
+  white-space: nowrap;
+}
+
+.app-header-tab:hover {
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
+.app-header-tab--active {
+  color: var(--accent);
+  background: rgba(232, 160, 74, 0.08);
+  border-color: rgba(232, 160, 74, 0.25);
+  font-weight: 500;
+}
+
+.app-header-tab-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+/* RIGHT */
+.app-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.app-header-chunks {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-3);
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  white-space: nowrap;
+}
