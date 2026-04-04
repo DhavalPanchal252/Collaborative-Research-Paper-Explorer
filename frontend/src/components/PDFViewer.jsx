@@ -1,6 +1,6 @@
 // src/components/PDFViewer.jsx
-// Phase 4: AI-Linked Highlight Intelligence System
-// Each highlight is now a knowledge node: text → note → aiExplanation
+// Phase 4+ Premium UX — smart popup anchoring, scroll sync, bidirectional
+// chat↔PDF linking, shimmer loading, error/retry, full state consistency.
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
@@ -14,56 +14,119 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
 ).toString();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers
+// UID
 // ─────────────────────────────────────────────────────────────────────────────
-
 let _uid = 0;
 function uid() { return ++_uid; }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Pure helpers — no React, no side-effects
+// ─────────────────────────────────────────────────────────────────────────────
+
 function toScrollAreaCoords(domRect, scrollAreaEl) {
-  const areaRect = scrollAreaEl.getBoundingClientRect();
+  const area = scrollAreaEl.getBoundingClientRect();
   return {
-    x:      domRect.left  - areaRect.left + scrollAreaEl.scrollLeft,
-    y:      domRect.top   - areaRect.top  + scrollAreaEl.scrollTop,
+    x:      domRect.left  - area.left + scrollAreaEl.scrollLeft,
+    y:      domRect.top   - area.top  + scrollAreaEl.scrollTop,
     width:  domRect.width,
     height: domRect.height,
   };
 }
 
-const MODE_CURSOR = {
-  select:    "text",
-  highlight: "text",
-  annotate:  "crosshair",
-};
+/**
+ * Compute fixed-position {x,y} for the annotation popup anchored to a
+ * highlight. Converts scroll-area coords → viewport coords, then clamps.
+ *
+ * Preference: below-left-aligned → flip above if no room below.
+ */
+function computePopupPosition(highlight, scrollAreaEl) {
+  if (!scrollAreaEl || !highlight?.rects?.[0]) return { x: 120, y: 160 };
+
+  const r    = highlight.rects[0];
+  const area = scrollAreaEl.getBoundingClientRect();
+
+  // scroll-area relative → viewport fixed
+  const vx = r.x + area.left - scrollAreaEl.scrollLeft;
+  const vy = r.y + area.top  - scrollAreaEl.scrollTop;
+
+  const PW  = 316;   // matches popup CSS width
+  const PH  = 460;   // conservative max-height
+  const PAD = 12;    // screen-edge padding
+  const GAP = 8;     // gap between highlight bottom and popup top
+
+  let x = vx;
+  let y = vy + r.height + GAP;  // default: below highlight
+
+  if (x + PW > window.innerWidth - PAD)  x = window.innerWidth - PW - PAD;
+  x = Math.max(PAD, x);
+
+  if (y + PH > window.innerHeight - PAD) y = vy - PH - GAP; // flip above
+  y = Math.max(PAD, y);
+
+  return { x, y };
+}
+
+/** True if highlight is already fully visible inside the scroll area. */
+function isHighlightVisible(highlight, scrollAreaEl, margin = 80) {
+  if (!scrollAreaEl || !highlight?.rects?.[0]) return false;
+  const rect   = highlight.rects[0];
+  const areaH  = scrollAreaEl.clientHeight;
+  const relTop = rect.y - scrollAreaEl.scrollTop;
+  return relTop >= margin && relTop + rect.height <= areaH - margin;
+}
+
+/** True if two rect arrays represent the same text selection (5 px tolerance). */
+function rectsMatch(a, b) {
+  if (!a?.length || !b?.length) return false;
+
+  const tol = Math.max(5, a[0].width * 0.05);
+
+  return (
+    Math.abs(a[0].x - b[0].x) < tol &&
+    Math.abs(a[0].y - b[0].y) < tol
+  );
+}
+
+const MODE_CURSOR = { select: "text", highlight: "text", annotate: "crosshair" };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AnnotationPopup — Phase 4: shows AI explanation + Re-explain button
+// AnnotationPopup
+//
+// Premium UX:
+//   • Anchored to highlight rects, not click position
+//   • Never closes or flickers during AI loading
+//   • Skeleton shimmer while waiting
+//   • Error state with inline retry
+//   • Outside-click suppressed while loading
 // ─────────────────────────────────────────────────────────────────────────────
 function AnnotationPopup({
   highlight,
   onSave,
   onDelete,
   onClose,
-  onReExplain,   // Phase 4: (highlight) => void
-  explainLoading, // Phase 4: global explain-in-flight flag
+  onReExplain,
+  explainLoading,
 }) {
-  const [note, setNote]  = useState(highlight.note ?? "");
-  const popupRef         = useRef(null);
-  const textareaRef      = useRef(null);
+  const [note, setNote] = useState(highlight.note ?? "");
+  const popupRef        = useRef(null);
 
-  useEffect(() => { textareaRef.current?.focus(); }, []);
+  useEffect(() => { setNote(highlight.note ?? ""); }, [highlight.note]);
 
-  // Close on outside click
+  // Outside-click closes popup — suppressed while AI is loading
   useEffect(() => {
-    function onMouseDown(e) {
-      if (popupRef.current && !popupRef.current.contains(e.target)) onClose();
+    function onDown(e) {
+      if (highlight.aiLoading) return;
+      if (popupRef.current?.contains(e.target)) return;
+      onClose();
     }
-    const t = setTimeout(() => document.addEventListener("mousedown", onMouseDown), 10);
-    return () => { clearTimeout(t); document.removeEventListener("mousedown", onMouseDown); };
-  }, [onClose]);
+    const t = setTimeout(() => document.addEventListener("mousedown", onDown), 20);
+    return () => { clearTimeout(t); document.removeEventListener("mousedown", onDown); };
+  }, [onClose, highlight.aiLoading]);
 
-  const px = Math.min(highlight.position?.x ?? 100, window.innerWidth - 320);
-  const py = Math.min(highlight.position?.y ?? 100, window.innerHeight - 320);
+  const { x: px, y: py } = highlight.position;
+  const isLoading = !!highlight.aiLoading;
+  const hasError  = !!highlight.aiError && !isLoading;
+  const hasAI     = !!highlight.aiExplanation && !isLoading && !hasError;
 
   function handleSave() {
     if (!note.trim()) return;
@@ -71,63 +134,64 @@ function AnnotationPopup({
     onClose();
   }
 
-  function handleDelete() {
-    onDelete(highlight.id);
-  }
-
-  // Phase 4: is AI currently working on THIS highlight?
-  const isThisLoading = highlight.aiLoading || (explainLoading && !highlight.aiExplanation);
-
   return (
     <div
       ref={popupRef}
-      className="annotation-popup"
+      className="annotation-popup annotation-popup--v2"
       style={{ left: px, top: py }}
       onMouseDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
     >
       {/* Header */}
       <div className="annotation-popup-header">
-        <span className="annotation-popup-label">✦ Note</span>
-        <button className="annotation-popup-close" onClick={onClose} aria-label="Close">✕</button>
+        <span className="annotation-popup-label">✦ Annotation</span>
+        <button
+          className="annotation-popup-close"
+          onClick={onClose}
+          disabled={isLoading}
+          aria-label="Close"
+        >✕</button>
       </div>
 
-      {/* Selected text preview */}
+      {/* Quote preview */}
       <p className="annotation-popup-quote">
-        "{highlight.text.length > 80
-          ? highlight.text.slice(0, 80) + "…"
+        "{highlight.text.length > 90
+          ? highlight.text.slice(0, 90) + "…"
           : highlight.text}"
       </p>
 
-      {/* ── Phase 4: AI Explanation block ─────────────────────────────────── */}
-      <div className="annotation-ai-block">
-      <div className="annotation-ai-header">
-        <span className="annotation-ai-label">✦ AI Explanation</span>
+      {/* AI block */}
+      <div className={[
+        "annotation-ai-block",
+        isLoading ? "annotation-ai-block--loading" : "",
+        hasError  ? "annotation-ai-block--error"   : "",
+      ].filter(Boolean).join(" ")}>
 
-        <button
-          className="annotation-btn annotation-btn--reexplain"
-          onClick={() => onReExplain(highlight)}
-          disabled={isThisLoading || explainLoading}
-          title="Re-generate explanation"
-        >
-          {isThisLoading ? (
-            <>
-              <span className="spinner spinner--xs" />
-              Generating...
-            </>
-          ) : (
-            "↺ Re-explain"
-          )}
-        </button>
+        <div className="annotation-ai-header">
+          <span className="annotation-ai-label">
+            {isLoading ? "✦ Generating…" : hasError ? "✦ Failed" : "✦ AI Explanation"}
+          </span>
+          <button
+            className="annotation-btn annotation-btn--reexplain"
+            onClick={() => onReExplain(highlight)}
+            disabled={isLoading || explainLoading}
+            title={hasError ? "Retry explanation" : "Re-generate explanation"}
+          >
+            {isLoading
+              ? <><span className="spinner spinner--xs" />&nbsp;Working</>
+              : hasError ? "↺ Retry" : "↺ Re-explain"}
+          </button>
         </div>
 
-        {isThisLoading ? (
-          <div className="annotation-ai-loading">
-            <span className="typing-dot" />
-            <span className="typing-dot" />
-            <span className="typing-dot" />
+        {isLoading ? (
+          <div className="annotation-ai-skeleton">
+            <div className="annotation-ai-shimmer" />
+            <div className="annotation-ai-shimmer annotation-ai-shimmer--md" />
+            <div className="annotation-ai-shimmer annotation-ai-shimmer--sm" />
           </div>
-        ) : highlight.aiExplanation ? (
+        ) : hasError ? (
+          <p className="annotation-ai-error-text">{highlight.aiError}</p>
+        ) : hasAI ? (
           <p className="annotation-ai-text">{highlight.aiExplanation}</p>
         ) : (
           <p className="annotation-ai-empty">
@@ -136,16 +200,13 @@ function AnnotationPopup({
               className="annotation-ai-trigger-link"
               onClick={() => onReExplain(highlight)}
               disabled={explainLoading}
-            >
-              Generate one →
-            </button>
+            >Generate one →</button>
           </p>
         )}
       </div>
 
       {/* Note textarea */}
       <textarea
-        ref={textareaRef}
         className="annotation-popup-textarea"
         placeholder="Add a personal note…"
         value={note}
@@ -155,55 +216,56 @@ function AnnotationPopup({
 
       {/* Actions */}
       <div className="annotation-popup-actions">
-        <button className="annotation-btn annotation-btn--delete" onClick={handleDelete}>
-          Delete
-        </button>
+        <button
+          className="annotation-btn annotation-btn--delete"
+          onClick={() => onDelete(highlight.id)}
+        >Delete</button>
         <button
           className="annotation-btn annotation-btn--save"
           onClick={handleSave}
           disabled={!note.trim()}
-        >
-          Save note
-        </button>
+        >Save note</button>
       </div>
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HighlightLayer — Phase 4: ai class + flash animation
+// HighlightLayer — states: default | noted | ai-ready | loading | error | flash
 // ─────────────────────────────────────────────────────────────────────────────
 function HighlightLayer({ highlights, onHighlightClick, mode, flashingId }) {
   if (!highlights.length) return null;
-
   const interactive = mode === "select";
 
   return (
     <div className="pdf-highlight-layer" aria-hidden="true">
       {highlights.map((h) =>
         h.rects.map((rect, ri) => {
-          // Build class list for Phase 4 states
-          const classes = [
+          const cls = [
             "pdf-highlight",
-            h.note          ? "pdf-highlight--noted" : "",
-            h.aiExplanation ? "pdf-highlight--ai"    : "",
-            h.aiLoading     ? "pdf-highlight--loading": "",
+            h.note          ? "pdf-highlight--noted"   : "",
+            h.aiExplanation ? "pdf-highlight--ai"      : "",
+            h.aiLoading     ? "pdf-highlight--loading" : "",
+            h.aiError       ? "pdf-highlight--error"   : "",
             flashingId === h.id ? "pdf-highlight--flash" : "",
           ].filter(Boolean).join(" ");
+
+          const isTarget = interactive && ri === 0;
 
           return (
             <div
               key={`${h.id}-${ri}`}
-              className={classes}
+              data-highlight-id={h.id}
+              className={cls}
               style={{
                 left:          rect.x,
                 top:           rect.y,
                 width:         rect.width,
                 height:        rect.height,
-                pointerEvents: interactive && ri === 0 ? "auto" : "none",
-                cursor:        interactive && ri === 0 ? "pointer" : "default",
+                pointerEvents: isTarget ? "auto" : "none",
+                cursor:        isTarget ? "pointer" : "default",
               }}
-              onClick={interactive && ri === 0
+              onClick={isTarget
                 ? (e) => { e.stopPropagation(); onHighlightClick(e, h); }
                 : undefined}
             />
@@ -215,7 +277,7 @@ function HighlightLayer({ highlights, onHighlightClick, mode, flashingId }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SelectionTooltip — unchanged from Phase 3
+// SelectionTooltip
 // ─────────────────────────────────────────────────────────────────────────────
 function SelectionTooltip({ position, onExplain, onDismiss, loading }) {
   if (!position) return null;
@@ -242,39 +304,80 @@ function SelectionTooltip({ position, onExplain, onDismiss, loading }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PDFViewer — Phase 4 props: explainResult + onExplainResultConsumed
+// PDFViewer — default export
+//
+// New props (Phase 4+):
+//   onExplainRequest(text, highlightId)  — highlightId wires chat linking
+//   focusedHighlightId                   — set by chat click; triggers scroll+flash
+//   onFocusedHighlightConsumed           — called after acting so App can reset
 // ─────────────────────────────────────────────────────────────────────────────
 export default function PDFViewer({
   file,
   onExplainRequest,
   explainLoading,
-  explainResult,           // Phase 4: { text, answer } | null — from App
-  onExplainResultConsumed, // Phase 4: () => void
+  explainResult,
+  onExplainResultConsumed,
+  focusedHighlightId,
+  onFocusedHighlightConsumed,
 }) {
-  const [numPages, setNumPages]       = useState(null);
-  const [loadError, setLoadError]     = useState(null);
-  const [tooltipPos, setTooltipPos]   = useState(null);
-  const [selectedText, setSelectedText] = useState("");
-
-  // Phase 0
-  const [mode, setMode] = useState("select");
-  const [zoom, setZoom] = useState(1);
-
-  // Phase 2
-  const [highlights, setHighlights]   = useState([]);
-
-  // Phase 3
+  const [numPages, setNumPages]               = useState(null);
+  const [loadError, setLoadError]             = useState(null);
+  const [tooltipPos, setTooltipPos]           = useState(null);
+  const [selectedText, setSelectedText]       = useState("");
+  const [mode, setMode]                       = useState("select");
+  const [zoom, setZoom]                       = useState(1);
+  const [highlights, setHighlights]           = useState([]);
   const [activeHighlight, setActiveHighlight] = useState(null);
+  const [flashingId, setFlashingId]           = useState(null);
 
-  // Phase 4
-  const [flashingId, setFlashingId]   = useState(null);
-  const pendingExplainIdRef           = useRef(null); // tracks highlight awaiting AI
-  const lastRangeRef                  = useRef(null); // stores selection range for Explain
+  const containerRef        = useRef(null);
+  const scrollAreaRef       = useRef(null);
+  const pendingExplainIdRef = useRef(null);   // which highlight is waiting for AI
+  const lastRangeRef        = useRef(null);   // browser Range from last mouseUp
+  const explainTimeoutRef   = useRef(null);   // 15 s safety timeout
+  const highlightsRef       = useRef(highlights);
+  const activeHighlightRef  = useRef(activeHighlight);
 
-  const containerRef  = useRef(null);
-  const scrollAreaRef = useRef(null);
+  useEffect(() => { highlightsRef.current = highlights; },           [highlights]);
+  useEffect(() => { activeHighlightRef.current = activeHighlight; }, [activeHighlight]);
+  useEffect(() => () => clearTimeout(explainTimeoutRef.current), []);
 
-  // ── Mode change ────────────────────────────────────────────────────────────
+  // ── Helpers ──────────────────────────────────────────────────────────────
+
+  function scrollToHighlightSmooth(id) {
+    const el = scrollAreaRef.current;
+    if (!el) return;
+    const h = highlightsRef.current.find((h) => h.id === id);
+    if (!h || isHighlightVisible(h, el)) return;
+    const rect = h.rects[0];
+    el.scrollTo({
+      top:      Math.max(0, rect.y - el.clientHeight / 2 + rect.height / 2),
+      behavior: "smooth",
+    });
+  }
+
+  function flashHighlight(id) {
+    setFlashingId(id);
+    setTimeout(() => setFlashingId(null), 1400);
+  }
+
+  function startExplainTimeout(id) {
+    clearTimeout(explainTimeoutRef.current);
+    explainTimeoutRef.current = setTimeout(() => {
+      if (pendingExplainIdRef.current !== id) return;
+      setHighlights((prev) =>
+        prev.map((h) =>
+          h.id === id
+            ? { ...h, aiLoading: false, aiError: "Request timed out. Please retry." }
+            : h
+        )
+      );
+      pendingExplainIdRef.current = null;
+    }, 15_000);
+  }
+
+  // ── Mode ──────────────────────────────────────────────────────────────────
+
   function handleModeChange(next) {
     setMode(next);
     setTooltipPos(null);
@@ -283,183 +386,180 @@ export default function PDFViewer({
     window.getSelection()?.removeAllRanges();
   }
 
-  // ── Phase 3: highlight clicked → open popup ──────────────────────────────
+  // ── Highlight click → anchor popup ───────────────────────────────────────
+
   function handleHighlightClick(e, highlight) {
-    if (activeHighlight?.id === highlight.id) return;
+    if (activeHighlight?.id === highlight.id) { setActiveHighlight(null); return; }
     setActiveHighlight({
       ...highlight,
-      position: { x: e.clientX + 12, y: e.clientY + 12 },
+      position: computePopupPosition(highlight, scrollAreaRef.current),
     });
   }
 
-  // ── Phase 3: save note ───────────────────────────────────────────────────
+  // Recompute popup position on resize
+  useEffect(() => {
+    function onResize() {
+      setActiveHighlight((prev) =>
+        prev
+          ? { ...prev, position: computePopupPosition(prev, scrollAreaRef.current) }
+          : null
+      );
+    }
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // Scroll: keep popup alive (reanchored) while AI is loading; close otherwise
+  useEffect(() => {
+    const el = scrollAreaRef.current;
+    if (!el) return;
+
+    let ticking = false;
+
+    function onScroll() {
+      if (!ticking) {
+        requestAnimationFrame(() => {
+          const cur = activeHighlightRef.current;
+          if (!cur) return;
+
+          if (cur.aiLoading) {
+            const fresh = highlightsRef.current.find((h) => h.id === cur.id);
+            if (!fresh) { setActiveHighlight(null); return; }
+
+            setActiveHighlight(prev =>
+              prev ? { ...prev, ...fresh, position: computePopupPosition(fresh, el) } : null
+            );
+          } else {
+            setActiveHighlight(prev => {
+              if (!prev) return null;
+
+              const fresh = highlightsRef.current.find(h => h.id === prev.id);
+              if (!fresh) return null;
+
+              return {
+                ...prev,
+                ...fresh,
+                position: computePopupPosition(fresh, el),
+              };
+            });
+          }
+
+          ticking = false;
+        });
+
+        ticking = true;
+      }
+    }
+
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Live-sync popup when highlight data changes (aiExplanation, aiLoading, aiError)
+  useEffect(() => {
+    setActiveHighlight((prev) => {
+      if (!prev) return null;
+      const fresh = highlights.find((h) => h.id === prev.id);
+      return fresh ? { ...fresh, position: prev.position } : null;
+    });
+  }, [highlights]);
+
+  // ── CRUD ──────────────────────────────────────────────────────────────────
+
   function handleSaveNote(id, note) {
-    setHighlights((prev) => prev.map((h) => h.id === id ? { ...h, note } : h));
-    // Sync activeHighlight so popup re-renders with new note
-    setActiveHighlight((prev) => prev?.id === id ? { ...prev, note } : prev);
+    setHighlights((prev) => prev.map((h) => (h.id === id ? { ...h, note } : h)));
   }
 
-  // ── Phase 3: delete highlight ────────────────────────────────────────────
   function handleDeleteHighlight(id) {
     setHighlights((prev) => prev.filter((h) => h.id !== id));
     setActiveHighlight(null);
   }
 
-  // ── Phase 4: create highlight and return its ID ──────────────────────────
   function createHighlightFromRange(range, text) {
     if (!scrollAreaRef.current) return null;
-
-    const rawRects = Array.from(range.getClientRects());
-    const rects = rawRects
+    const rects = Array.from(range.getClientRects())
       .filter((r) => r.width > 1 && r.height > 1)
       .map((r) => toScrollAreaCoords(r, scrollAreaRef.current));
-
     if (!rects.length) return null;
+
+    // Duplicate protection — reuse silently
+    const dupe = highlightsRef.current.find(
+      (h) => h.text === text && rectsMatch(h.rects, rects)
+    );
+    if (dupe) return dupe.id;
 
     const newId = uid();
     setHighlights((prev) => [
       ...prev,
-      {
-        id:            newId,
-        text,
-        rects,
-        note:          "",
-        aiExplanation: null, // Phase 4
-        aiLoading:     false, // Phase 4
-        createdAt:     new Date(),
-      },
+      { id: newId, text, rects, note: "", aiExplanation: null, aiLoading: false, aiError: null, createdAt: new Date() },
     ]);
-
     window.getSelection()?.removeAllRanges();
     return newId;
   }
 
-  // ── Phase 4: "Re-explain" from AnnotationPopup ──────────────────────────
+  // ── Re-explain ────────────────────────────────────────────────────────────
+
   function handleReExplain(highlight) {
     if (explainLoading) return;
-
     pendingExplainIdRef.current = highlight.id;
-
     setHighlights((prev) =>
-      prev.map((h) =>
-        h.id === highlight.id
-          ? { ...h, aiLoading: true }
-          : h
-      )
+      prev.map((h) => h.id === highlight.id ? { ...h, aiLoading: true, aiError: null } : h)
     );
-
-    // ✅ DO NOT CLOSE POPUP
-
-    onExplainRequest(highlight.text);
+    startExplainTimeout(highlight.id);
+    onExplainRequest(highlight.text, highlight.id); // passes highlightId for chat linking
   }
 
-  // ── Phase 4: consume explainResult from App ──────────────────────────────
-
-  // 🔥 Timeout safety (10s fallback)
-  useEffect(() => {
-    if (!pendingExplainIdRef.current) return;
-
-    const timeout = setTimeout(() => {
-      console.warn("Explain timeout — resetting loading state");
-
-      setHighlights(prev => {
-        if (!pendingExplainIdRef.current) return prev;
-
-        return prev.map(h =>
-          h.id === pendingExplainIdRef.current
-            ? { ...h, aiLoading: false }
-            : h
-        );
-      });
-
-      pendingExplainIdRef.current = null;
-    }, 10000); // 10 sec
-
-    return () => clearTimeout(timeout);
-  }, [highlights]);
+  // ── Consume explainResult ─────────────────────────────────────────────────
 
   useEffect(() => {
     if (!explainResult) return;
+    clearTimeout(explainTimeoutRef.current);
 
-    const { text, answer } = explainResult;
-
-    // Guard: don't attach empty responses
-    if (!answer || typeof answer !== "string" || answer.trim().length < 5) {
-      setHighlights(prev =>
-        prev.map(h =>
-          h.id === pendingExplainIdRef.current
-            ? { ...h, aiLoading: false }
-            : h
-        )
-      );
-
-      pendingExplainIdRef.current = null;
-      onExplainResultConsumed?.();
-      return;
-    }
-
-    const targetId = pendingExplainIdRef.current;
+    const { answer } = explainResult;
+    const targetId   = pendingExplainIdRef.current;
+    const isError    = !answer || typeof answer !== "string"
+      || answer.startsWith("⚠") || answer.trim().length < 5;
 
     setHighlights((prev) =>
       prev.map((h) => {
-        // Primary match: exact ID (most accurate — handles duplicate text)
-        if (targetId && h.id === targetId) {
-          return { ...h, aiExplanation: answer, aiLoading: false };
-        }
-        // Fallback: first un-explained highlight with matching text
-        if (!targetId && h.text === text && !h.aiExplanation) {
-          return { ...h, aiExplanation: answer, aiLoading: false };
-        }
-        return h;
+        if (!targetId || h.id !== targetId) return h;
+        return isError
+          ? { ...h, aiLoading: false, aiError: answer || "No response. Please retry." }
+          : { ...h, aiExplanation: answer, aiLoading: false, aiError: null };
       })
     );
 
-    // Flash and scroll to the updated highlight
-    if (targetId) {
-      setFlashingId(targetId);
-      setTimeout(() => setFlashingId(null), 1400);
+    if (targetId && !isError) {
+      scrollToHighlightSmooth(targetId);
+      setTimeout(() => flashHighlight(targetId), 200); // flash after scroll settles
     }
 
     pendingExplainIdRef.current = null;
     onExplainResultConsumed?.();
   }, [explainResult]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Phase 4: scroll to flashing highlight ───────────────────────────────
-  useEffect(() => {
-    if (!flashingId || !scrollAreaRef.current) return;
+  // ── Bidirectional: focus from chat ───────────────────────────────────────
 
-    const target = highlights.find((h) => h.id === flashingId);
-    if (target?.rects?.[0]) {
-      scrollAreaRef.current.scrollTo({
-        top:      Math.max(0, target.rects[0].y - 120),
-        behavior: "smooth",
+  useEffect(() => {
+    if (!focusedHighlightId) return;
+    const h = highlightsRef.current.find((h) => h.id === focusedHighlightId);
+    onFocusedHighlightConsumed?.();
+    if (!h) return;
+
+    scrollToHighlightSmooth(focusedHighlightId);
+    flashHighlight(focusedHighlightId);
+
+    // Open popup after scroll animation runs
+    setTimeout(() => {
+      setActiveHighlight({
+        ...h,
+        position: computePopupPosition(h, scrollAreaRef.current),
       });
-    }
-  }, [flashingId]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, 320);
+  }, [focusedHighlightId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Phase 4: keep activeHighlight in sync after state updates ───────────
-  // (so the popup immediately reflects aiExplanation changes)
-  useEffect(() => {
-    if (!activeHighlight) return;
+  // ── Mouse / event handlers ────────────────────────────────────────────────
 
-    setActiveHighlight(prev => {
-      const updated = highlights.find(h => h.id === prev.id);
-      if (!updated) return null;
-
-      return {
-        ...updated,
-        position: prev.position
-      };
-    });
-  }, [highlights]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── Phase 2: capture highlight in highlight mode ─────────────────────────
-  // (kept for highlight-mode mouseUp, same as Phase 3)
-  function captureHighlightFromRange(range, text) {
-    createHighlightFromRange(range, text);
-  }
-
-  // ── Unified mouseUp ──────────────────────────────────────────────────────
   const handleMouseUp = useCallback(() => {
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) return;
@@ -469,52 +569,34 @@ export default function PDFViewer({
 
     setTimeout(() => {
       if (mode === "annotate") return;
-      if (!text || text.length < 5) {
-        setTooltipPos(null);
-        setSelectedText("");
-        return;
-      }
+      if (!text || text.length < 5) { setTooltipPos(null); setSelectedText(""); return; }
       if (!containerRef.current?.contains(range.commonAncestorContainer)) return;
 
       if (mode === "select") {
         const rect = range.getBoundingClientRect();
         setSelectedText(text);
         setTooltipPos({ x: rect.left + rect.width / 2, y: rect.top });
-        lastRangeRef.current = range; // Phase 4: store for Explain
+        lastRangeRef.current = range;
       } else if (mode === "highlight") {
-        captureHighlightFromRange(range, text);
+        createHighlightFromRange(range, text);
       }
     }, 10);
   }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Annotate click ────────────────────────────────────────────────────────
   const handleClick = useCallback((e) => {
     if (mode !== "annotate") return;
     if (e.target.closest(".selection-tooltip")) return;
-    if (e.target.closest(".annotation-popup"))  return;
-    console.log("Annotate at:", { x: e.clientX, y: e.clientY });
+    if (e.target.closest(".annotation-popup")) return;
   }, [mode]);
 
-  // ── Dismiss tooltip on outside mousedown ─────────────────────────────────
   const handleMouseDown = useCallback((e) => {
-    if (!e.target.closest(".selection-tooltip")) {
-      setTooltipPos(null);
-      setSelectedText("");
-    }
+    if (!e.target.closest(".selection-tooltip")) { setTooltipPos(null); setSelectedText(""); }
   }, []);
 
   useEffect(() => {
     document.addEventListener("mousedown", handleMouseDown);
     return () => document.removeEventListener("mousedown", handleMouseDown);
   }, [handleMouseDown]);
-
-  useEffect(() => {
-    const el = scrollAreaRef.current;
-    if (!el) return;
-    const handleScroll = () => setActiveHighlight(null);
-    el.addEventListener("scroll", handleScroll);
-    return () => el.removeEventListener("scroll", handleScroll);
-  }, []);
 
   useEffect(() => {
     if (!explainLoading) {
@@ -524,45 +606,42 @@ export default function PDFViewer({
     }
   }, [explainLoading]);
 
-  // ── Phase 4: Explain button clicked in select mode ───────────────────────
+  // ── Explain from tooltip ──────────────────────────────────────────────────
+
   function handleExplain() {
     if (!selectedText || explainLoading) return;
 
-    // Find existing highlight with same text, or create a new one
-    let existing = null;
+    let highlightId = null;
 
     if (lastRangeRef.current && scrollAreaRef.current) {
-      const rawRects = Array.from(lastRangeRef.current.getClientRects());
+      const newRects = Array.from(lastRangeRef.current.getClientRects())
+        .filter((r) => r.width > 1 && r.height > 1)
+        .map((r) => toScrollAreaCoords(r, scrollAreaRef.current));
 
-      const newRects = rawRects
-        .filter(r => r.width > 1 && r.height > 1)
-        .map(r => toScrollAreaCoords(r, scrollAreaRef.current));
-
-      existing = highlights.find(h =>
-        h.text === selectedText &&
-        JSON.stringify(h.rects) === JSON.stringify(newRects)
+      const existing = highlightsRef.current.find(
+        (h) => h.text === selectedText && rectsMatch(h.rects, newRects)
       );
-    }
 
-    if (existing) {
-      // Reuse existing highlight — just request a fresh explanation
-      pendingExplainIdRef.current = existing.id;
-      setHighlights((prev) =>
-        prev.map((h) => h.id === existing.id ? { ...h, aiLoading: true } : h)
-      );
-    } else if (lastRangeRef.current) {
-      // Create new highlight and link the pending explain to it
-      const newId = createHighlightFromRange(lastRangeRef.current, selectedText);
-      if (newId) {
-        pendingExplainIdRef.current = newId;
-        // Mark as loading immediately
+      if (existing) {
+        highlightId = existing.id;
+        pendingExplainIdRef.current = existing.id;
         setHighlights((prev) =>
-          prev.map((h) => h.id === newId ? { ...h, aiLoading: true } : h)
+          prev.map((h) => h.id === existing.id ? { ...h, aiLoading: true, aiError: null } : h)
         );
+      } else {
+        const newId = createHighlightFromRange(lastRangeRef.current, selectedText);
+        if (newId) {
+          highlightId = newId;
+          pendingExplainIdRef.current = newId;
+          setHighlights((prev) =>
+            prev.map((h) => h.id === newId ? { ...h, aiLoading: true } : h)
+          );
+        }
       }
     }
 
-    onExplainRequest(selectedText);
+    startExplainTimeout(highlightId);
+    onExplainRequest(selectedText, highlightId);
   }
 
   function handleDismiss() {
@@ -571,15 +650,8 @@ export default function PDFViewer({
     window.getSelection()?.removeAllRanges();
   }
 
-  function onDocumentLoadSuccess({ numPages }) {
-    setNumPages(numPages);
-    setLoadError(null);
-  }
-
-  function onDocumentLoadError(error) {
-    console.error("PDF load error:", error);
-    setLoadError("Failed to load PDF. Please try uploading again.");
-  }
+  function onDocumentLoadSuccess({ numPages }) { setNumPages(numPages); setLoadError(null); }
+  function onDocumentLoadError(err) { console.error(err); setLoadError("Failed to load PDF."); }
 
   if (!file) return null;
 
@@ -588,7 +660,6 @@ export default function PDFViewer({
 
   return (
     <div className="pdf-viewer" ref={containerRef}>
-
       <PDFToolbar
         mode={mode}
         onModeChange={handleModeChange}
@@ -617,12 +688,7 @@ export default function PDFViewer({
             file={file}
             onLoadSuccess={onDocumentLoadSuccess}
             onLoadError={onDocumentLoadError}
-            loading={
-              <div className="pdf-loading">
-                <span className="spinner" />
-                <span>Loading PDF…</span>
-              </div>
-            }
+            loading={<div className="pdf-loading"><span className="spinner" /><span>Loading PDF…</span></div>}
           >
             {Array.from({ length: numPages ?? 0 }, (_, i) => (
               <Page
@@ -637,28 +703,25 @@ export default function PDFViewer({
           </Document>
         )}
 
-        {/* Phase 2+3+4: highlight overlay */}
         <HighlightLayer
           highlights={highlights}
           onHighlightClick={handleHighlightClick}
           mode={mode}
-          flashingId={flashingId}   // Phase 4
+          flashingId={flashingId}
         />
       </div>
 
-      {/* Phase 3+4: annotation popup */}
       {activeHighlight && (
         <AnnotationPopup
           highlight={activeHighlight}
           onSave={handleSaveNote}
           onDelete={handleDeleteHighlight}
           onClose={() => setActiveHighlight(null)}
-          onReExplain={handleReExplain}   // Phase 4
-          explainLoading={explainLoading} // Phase 4
+          onReExplain={handleReExplain}
+          explainLoading={explainLoading}
         />
       )}
 
-      {/* Select-mode tooltip */}
       {mode === "select" && (
         <SelectionTooltip
           position={tooltipPos}

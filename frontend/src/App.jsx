@@ -1,32 +1,39 @@
 // src/App.jsx
-// Phase 4: explainResult is now passed to PDFViewer so highlights
-// can receive and store their AI explanations.
+// Phase 4+: bidirectional chat↔PDF linking.
+// onExplainRequest now receives (text, highlightId) and threads highlightId
+// through to the chat message so clicking it scrolls back to the highlight.
 
-import { useState, useCallback } from "react";
-import UploadPanel from "./components/UploadPanel";
-import ChatPanel from "./components/ChatPanel";
-import PDFViewer from "./components/PDFViewer";
-import ModelSelector from "./components/ModelSelector";
-import PaperInfo from "./components/sidebar/PaperInfo";
-import SectionsPanel from "./components/sidebar/SectionsPanel";
-import NotesPanel from "./components/sidebar/NotesPanel";
-import Header from "./components/layout/Header";
-import { uploadPDF } from "./api/upload";
+import { useState, useCallback, useRef } from "react";
+import UploadPanel    from "./components/UploadPanel";
+import ChatPanel      from "./components/ChatPanel";
+import PDFViewer      from "./components/PDFViewer";
+import ModelSelector  from "./components/ModelSelector";
+import PaperInfo      from "./components/sidebar/PaperInfo";
+import SectionsPanel  from "./components/sidebar/SectionsPanel";
+import NotesPanel     from "./components/sidebar/NotesPanel";
+import Header         from "./components/layout/Header";
+import { uploadPDF }  from "./api/upload";
 import { explainSelection } from "./api/explain";
 
 export default function App() {
-  const [uploadedFile, setUploadedFile]   = useState(null);
-  const [uploadMeta, setUploadMeta]       = useState(null);
-  const [model, setModel]                 = useState("groq");
-  const [uploading, setUploading]         = useState(false);
-  const [uploadError, setUploadError]     = useState(null);
-  const [explainLoading, setExplainLoading] = useState(false);
+  const [uploadedFile, setUploadedFile]       = useState(null);
+  const [uploadMeta, setUploadMeta]           = useState(null);
+  const [model, setModel]                     = useState("groq");
+  const [uploading, setUploading]             = useState(false);
+  const [uploadError, setUploadError]         = useState(null);
+  const [explainLoading, setExplainLoading]   = useState(false);
+  const [injectMessage, setInjectMessage]     = useState(null);
+  const [explainResult, setExplainResult]     = useState(null);
 
-  // Chat injection (unchanged from Phase 3)
-  const [injectMessage, setInjectMessage] = useState(null);
+  // Bidirectional link: when user clicks a chat message with a highlightId,
+  // this triggers PDFViewer to scroll + flash the corresponding highlight.
+  const [focusedHighlightId, setFocusedHighlightId] = useState(null);
 
-  // Phase 4: structured result routed back to PDFViewer for highlight attachment
-  const [explainResult, setExplainResult] = useState(null);
+  // Track which highlightId the current explain call belongs to so we can
+  // include it in the chat message (enabling the ↗ PDF link button).
+  const pendingHighlightIdRef = useRef(null);
+
+  // ── Upload ────────────────────────────────────────────────────────────────
 
   async function handleUpload(file) {
     setUploading(true);
@@ -50,16 +57,21 @@ export default function App() {
     setUploadError(null);
     setInjectMessage(null);
     setExplainResult(null);
+    setFocusedHighlightId(null);
+    pendingHighlightIdRef.current = null;
   }
 
-  // ── Phase 4: explain flow ─────────────────────────────────────────────────
-  // Sends selected text to the backend, then:
-  //   1. Injects question + answer into ChatPanel (existing behavior)
-  //   2. Sets explainResult so PDFViewer can attach the answer to the highlight
+  // ── Explain flow ──────────────────────────────────────────────────────────
+  // PDFViewer passes (text, highlightId) so we can:
+  //   1. Store highlightId for inclusion in the chat message
+  //   2. Include it in explainResult so PDFViewer can attach it to the highlight
+  //   3. Include it in injectMessage so ChatPanel can show the ↗ PDF link
+
   const handleExplainRequest = useCallback(
-    async (selectedText) => {
+    async (selectedText, highlightId = null) => {
       if (!selectedText || explainLoading) return;
 
+      pendingHighlightIdRef.current = highlightId;
       setExplainLoading(true);
 
       const userQuestion = `✦ Explain: "${selectedText.slice(0, 120)}${
@@ -67,106 +79,105 @@ export default function App() {
       }"`;
 
       try {
-        // explainSelection now returns { answer, source_chunks, confidence }
         const { answer, source_chunks, confidence } = await explainSelection(
           selectedText,
           model
         );
 
-        // 1. Inject into chat panel
+        // 1. Inject into chat (with highlightId for the ↗ PDF button)
         setInjectMessage({
-          question: userQuestion,
-          answer: answer || "⚠ No response from model"
+          question:    userQuestion,
+          answer:      answer?.trim() ? answer : "⚠ Model returned empty response. Try again.",
+          highlightId: pendingHighlightIdRef.current,
         });
 
-        // 2. Pass structured result to PDFViewer for highlight attachment
+        // 2. Route result back to PDFViewer to attach to highlight
         setExplainResult({ text: selectedText, answer, source_chunks, confidence });
 
       } catch (err) {
         const errorMsg = `⚠ Could not explain: ${err.message || "Unknown error"}`;
-
-        // Still inject error message into chat so the user sees feedback
-        setInjectMessage({ question: userQuestion, answer: errorMsg });
-
-        // Pass error result so PDFViewer can clear the loading spinner
+        setInjectMessage({
+          question:    userQuestion,
+          answer:      errorMsg,
+          highlightId: pendingHighlightIdRef.current,
+        });
         setExplainResult({ text: selectedText, answer: errorMsg });
       } finally {
+        pendingHighlightIdRef.current = null;
         setExplainLoading(false);
       }
     },
     [model, explainLoading]
   );
 
-  const handleInjectConsumed      = useCallback(() => setInjectMessage(null),  []);
-  const handleExplainResultConsumed = useCallback(() => setExplainResult(null), []);
+  // ── Bidirectional: chat → PDF ─────────────────────────────────────────────
+  // Called by ChatPanel → ChatMessage when user clicks the ↗ PDF link.
+  const handleHighlightFocus = useCallback((id) => {
+    setFocusedHighlightId(id);
+  }, []);
+
+  const handleInjectConsumed          = useCallback(() => setInjectMessage(null),  []);
+  const handleExplainResultConsumed   = useCallback(() => setExplainResult(null),  []);
+  const handleFocusedHighlightConsumed = useCallback(() => setFocusedHighlightId(null), []);
 
   const hasPaper = !!uploadedFile;
 
-  /* ─── PAPER LOADED ──────────────────────────────────────────────────────── */
+  /* ─── PAPER LOADED ───────────────────────────────────────────────────────── */
   if (hasPaper) {
     return (
       <div className="app-paper-layout">
-
         <Header model={model} uploadMeta={uploadMeta} />
 
         <div className="app-paper-body">
-
-          {/* ── Column 1: Sidebar ── */}
+          {/* Sidebar */}
           <aside className="sidebar">
             <div className="sidebar-section">
               <p className="section-label">PAPER</p>
-              <PaperInfo
-                uploadedFile={uploadedFile}
-                uploadMeta={uploadMeta}
-                onReset={handleReset}
-              />
+              <PaperInfo uploadedFile={uploadedFile} uploadMeta={uploadMeta} onReset={handleReset} />
             </div>
-
             <div className="sidebar-section sidebar-section--grow">
               <p className="section-label">SECTIONS</p>
               <SectionsPanel />
             </div>
-
             <div className="sidebar-section">
               <p className="section-label">NOTES</p>
               <NotesPanel />
             </div>
-
             <div className="sidebar-footer">
               <span className="status-dot" data-ready="true" />
-              <span className="status-text">
-                {uploadMeta?.chunks_created ?? "—"} chunks indexed
-              </span>
+              <span className="status-text">{uploadMeta?.chunks_created ?? "—"} chunks indexed</span>
             </div>
           </aside>
 
-          {/* ── Column 2: PDF Viewer ── */}
+          {/* PDF Viewer */}
           <div className="paper-pdf">
             <PDFViewer
               file={uploadedFile}
-              onExplainRequest={handleExplainRequest}
+              onExplainRequest={handleExplainRequest}      // (text, highlightId) => void
               explainLoading={explainLoading}
-              explainResult={explainResult}                       // Phase 4
-              onExplainResultConsumed={handleExplainResultConsumed} // Phase 4
+              explainResult={explainResult}
+              onExplainResultConsumed={handleExplainResultConsumed}
+              focusedHighlightId={focusedHighlightId}       // Phase 4+ bidirectional
+              onFocusedHighlightConsumed={handleFocusedHighlightConsumed}
             />
           </div>
 
-          {/* ── Column 3: Chat ── */}
+          {/* Chat */}
           <div className="paper-chat">
             <ChatPanel
               model={model}
               paperName={uploadedFile.name}
               injectMessage={injectMessage}
               onInjectConsumed={handleInjectConsumed}
+              onHighlightClick={handleHighlightFocus}  // Phase 4+ bidirectional
             />
           </div>
-
         </div>
       </div>
     );
   }
 
-  /* ─── NO PAPER: home screen (unchanged) ─────────────────────────────────── */
+  /* ─── HOME SCREEN (unchanged) ────────────────────────────────────────────── */
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -174,7 +185,6 @@ export default function App() {
           <span className="logo-icon">◈</span>
           <span className="logo-text">Arxiv<em>Mind</em></span>
         </div>
-
         <div className="sidebar-section">
           <p className="section-label">PAPER</p>
           <UploadPanel
@@ -186,21 +196,16 @@ export default function App() {
             onReset={handleReset}
           />
         </div>
-
         <div className="sidebar-section">
           <p className="section-label">MODEL</p>
           <ModelSelector model={model} onChange={setModel} />
         </div>
-
         <div className="sidebar-footer">
           <span className="status-dot" data-ready="false" />
           <span className="status-text">No paper loaded</span>
         </div>
       </aside>
-
-      <div className="workspace">
-        <EmptyState />
-      </div>
+      <div className="workspace"><EmptyState /></div>
     </div>
   );
 }

@@ -1,7 +1,18 @@
-export default function ChatMessage({ role, content, source }) {
-  const isUser = role === "user";
+// src/components/ChatMessage.jsx
+// Phase 4+: highlightId + onHighlightClick enable chat → PDF navigation.
+
+export default function ChatMessage({ role, content, source, highlightId, onHighlightClick }) {
+  const isUser      = role === "user";
   const isAssistant = role === "assistant";
-  const isExplain = source === "explain";
+  const isExplain   = source === "explain";
+
+  // A message is "linked" when it carries a highlightId and a handler exists
+  const isLinked = isAssistant && highlightId != null && typeof onHighlightClick === "function";
+
+  function handleLinkClick(e) {
+    e.stopPropagation();
+    onHighlightClick(highlightId);
+  }
 
   return (
     <div className={`chat-message chat-message--${role}`}>
@@ -9,12 +20,21 @@ export default function ChatMessage({ role, content, source }) {
         {isUser ? "U" : "◈"}
       </div>
 
-      <div className={`msg-bubble ${isUser ? "msg-bubble--user" : "msg-bubble--ai"}`}>
-        
-        {/* 🔥 NEW: Explain Badge */}
+      <div className={`msg-bubble ${isUser ? "msg-bubble--user" : "msg-bubble--ai"} ${isLinked ? "msg-bubble--linked" : ""}`}>
+
+        {/* Explain badge — shown on AI explain messages */}
         {isExplain && isAssistant && (
           <div className="msg-explain-badge">
-            ✦ Selection Explanation
+            <span>✦ Selection Explanation</span>
+            {isLinked && (
+              <button
+                className="msg-pdf-link"
+                onClick={handleLinkClick}
+                title="Jump to highlight in PDF"
+              >
+                ↗ View in PDF
+              </button>
+            )}
           </div>
         )}
 
@@ -24,16 +44,12 @@ export default function ChatMessage({ role, content, source }) {
   );
 }
 
-
-// ✅ KEEP YOUR EXISTING FORMATTER (VERY GOOD)
+// ─────────────────────────────────────────────────────────────────────────────
+// FormattedContent — unchanged from previous phase, safety guards kept
+// ─────────────────────────────────────────────────────────────────────────────
 function FormattedContent({ content }) {
-  // 🔥 SAFETY GUARD
   if (!content || typeof content !== "string") {
-    return (
-      <div className="msg-content msg-content--empty">
-        ⚠ No response available
-      </div>
-    );
+    return <div className="msg-content msg-content--empty">⚠ No response available</div>;
   }
 
   const parts = content.split(/(```[\s\S]*?```)/g);
@@ -63,17 +79,15 @@ function FormattedContent({ content }) {
 }
 
 function inlineFormat(text) {
-  if (!text || typeof text !== "string") return null;
-
+  if (!text || typeof text !== "string") {
+    return <span className="msg-content--empty">⚠ Invalid text</span>;
+  }
   const segments = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
-
   return segments.map((seg, i) => {
-    if (seg.startsWith("**") && seg.endsWith("**")) {
+    if (seg.startsWith("**") && seg.endsWith("**"))
       return <strong key={i}>{seg.slice(2, -2)}</strong>;
-    }
-    if (seg.startsWith("`") && seg.endsWith("`")) {
+    if (seg.startsWith("`") && seg.endsWith("`"))
       return <code key={i} className="msg-inline-code">{seg.slice(1, -1)}</code>;
-    }
     return seg;
   });
 }

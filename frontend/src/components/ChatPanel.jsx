@@ -1,6 +1,6 @@
 // src/components/ChatPanel.jsx
-// Extended to accept injected explain messages from the PDF selection flow.
-// All original functionality is preserved — this is a minimal extension only.
+// Phase 4+: messages now carry highlightId for bidirectional PDF linking.
+// onHighlightClick prop is threaded through to ChatMessage.
 
 import { useState, useRef, useEffect } from "react";
 import { sendQuestion } from "../api/chat";
@@ -16,39 +16,38 @@ const SUGGESTIONS = [
 export default function ChatPanel({
   model,
   paperName,
-  injectMessage,      // { question: string, answer: string } | null
-  onInjectConsumed,   // () => void — called after injection is processed
+  injectMessage,       // { question, answer, highlightId? } | null
+  onInjectConsumed,    // () => void
+  onHighlightClick,    // (highlightId: number) => void  ← Phase 4+ bidirectional link
 }) {
   const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const bottomRef = useRef(null);
-  const inputRef = useRef(null);
+  const [input, setInput]       = useState("");
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState(null);
+  const bottomRef               = useRef(null);
+  const inputRef                = useRef(null);
 
-  // ── Scroll to bottom whenever messages change ─────────────────────────────
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
-  // ── Consume injected explain message ─────────────────────────────────────
-  // When App.jsx passes a new { question, answer } pair from the explain
-  // endpoint, we push both messages into the local history and signal back
-  // that we've consumed it so App clears the ref.
+  // Consume injected explain messages (from PDF selection)
+  // highlightId is stored on the assistant message for chat → PDF linking
   useEffect(() => {
     if (!injectMessage) return;
-
     setMessages((prev) => [
       ...prev,
-      // User "question" — styled with the explain badge
       { role: "user",      content: injectMessage.question, source: "explain" },
-      { role: "assistant", content: injectMessage.answer,   source: "explain" },
+      {
+        role:        "assistant",
+        content:     injectMessage.answer,
+        source:      "explain",
+        highlightId: injectMessage.highlightId ?? null, // Phase 4+
+      },
     ]);
-
     onInjectConsumed?.();
   }, [injectMessage, onInjectConsumed]);
 
-  // ── Normal chat send ──────────────────────────────────────────────────────
   async function handleSend(question) {
     const text = (question ?? input).trim();
     if (!text || loading) return;
@@ -70,10 +69,7 @@ export default function ChatPanel({
   }
 
   function onKeyDown(e) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
   }
 
   const isEmpty = messages.length === 0;
@@ -85,9 +81,7 @@ export default function ChatPanel({
         <div className="chat-header-left">
           <span className="chat-paper-icon">📄</span>
           <span className="chat-paper-name" title={paperName}>
-            {paperName.length > 40
-              ? paperName.slice(0, 37) + "..."
-              : paperName}
+            {paperName.length > 40 ? paperName.slice(0, 37) + "..." : paperName}
           </span>
         </div>
         <span className={`chat-model-pill chat-model-pill--${model}`}>
@@ -102,11 +96,7 @@ export default function ChatPanel({
             <p className="suggestions-label">Try asking…</p>
             <div className="suggestions-grid">
               {SUGGESTIONS.map((s) => (
-                <button
-                  key={s}
-                  className="suggestion-chip"
-                  onClick={() => handleSend(s)}
-                >
+                <button key={s} className="suggestion-chip" onClick={() => handleSend(s)}>
                   {s}
                 </button>
               ))}
@@ -119,8 +109,9 @@ export default function ChatPanel({
             key={i}
             role={msg.role}
             content={msg.content}
-            // Optional: pass source so ChatMessage can badge explain messages
             source={msg.source}
+            highlightId={msg.highlightId}       // Phase 4+
+            onHighlightClick={onHighlightClick} // Phase 4+
           />
         ))}
 
@@ -135,11 +126,7 @@ export default function ChatPanel({
           </div>
         )}
 
-        {error && (
-          <div className="chat-error">
-            <span>⚠ {error}</span>
-          </div>
-        )}
+        {error && <div className="chat-error"><span>⚠ {error}</span></div>}
 
         <div ref={bottomRef} />
       </div>

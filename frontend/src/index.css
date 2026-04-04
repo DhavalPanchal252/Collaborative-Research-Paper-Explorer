@@ -1590,3 +1590,200 @@ textarea { font-family: inherit; font-size: inherit; }
   opacity: 0.35;
   cursor: not-allowed;
 }
+/* ═════════════════════════════════════════════════════════════════════════════
+   PHASE 4+ PREMIUM UX — append-only, overrides conflicting Phase 4 rules
+   via CSS cascade (last declaration wins).
+   ═════════════════════════════════════════════════════════════════════════════ */
+
+
+/* ── Popup v2: wider, taller, better shadow depth ─────────────────────────── */
+.annotation-popup--v2 {
+  width: 316px;
+  gap:   12px;
+  padding: 16px;
+  box-shadow:
+    0 16px 48px rgba(0, 0, 0, 0.65),
+    0 4px  16px rgba(0, 0, 0, 0.35),
+    0 0    0 1px rgba(255, 255, 255, 0.05);
+}
+
+/* Popup entrance — scale+fade from anchor point, Linear/Notion style */
+@keyframes popup-in-v2 {
+  from { opacity: 0; transform: scale(0.96) translateY(6px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0);   }
+}
+.annotation-popup--v2 {
+  animation: popup-in-v2 150ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Subtle hover state on the close button */
+.annotation-popup--v2 .annotation-popup-close:disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   HIGHLIGHT STATES — override conflicting Phase 4 definitions (cascade wins)
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* Loading: diagonal shimmer stripe moving right — overrides the duplicate
+   opacity-pulse definitions that shipped in Phase 4 */
+.pdf-highlight--loading {
+  opacity: 1 !important;
+  animation: none !important;
+  background-image: repeating-linear-gradient(
+    -55deg,
+    rgba(255, 210, 60, 0.28) 0px,
+    rgba(255, 210, 60, 0.28) 6px,
+    rgba(255, 210, 60, 0.52) 6px,
+    rgba(255, 210, 60, 0.52) 12px
+  ) !important;
+  background-size: 20px 20px;
+  animation: highlight-shimmer 0.55s linear infinite !important;
+  box-shadow: 0 0 0 1px rgba(255, 200, 50, 0.4) !important;
+}
+
+@keyframes highlight-shimmer {
+  from { background-position: 0 0;  }
+  to   { background-position: 24px 0; }
+}
+
+/* Error state */
+.pdf-highlight--error {
+  background: rgba(224, 92, 92, 0.22);
+  box-shadow:
+    0 0 0 1px rgba(224, 92, 92, 0.38),
+    inset 0 -2px 0 0 rgba(224, 92, 92, 0.55);
+}
+.pdf-highlight--error:hover {
+  background: rgba(224, 92, 92, 0.32);
+}
+
+/* AI-ready: richer hover to invite click */
+.pdf-highlight--ai:hover {
+  background: rgba(90, 190, 255, 0.34);
+  box-shadow:
+    0 0 0 1.5px rgba(90, 190, 255, 0.52),
+    inset 0 -2px 0 0 rgba(90, 190, 255, 0.80);
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+
+/* Flash — warm yellow → AI blue → settle */
+@keyframes highlight-flash-v2 {
+  0%   { background: rgba(255, 210, 70,  0.60); box-shadow: 0 0 0 2.5px rgba(255, 200, 50, 0.55); }
+  40%  { background: rgba(90,  190, 255, 0.50); box-shadow: 0 0 0 2.5px rgba(90, 190, 255, 0.50); }
+  100% { background: rgba(90,  190, 255, 0.22); box-shadow: 0 0 0 1px rgba(90, 190, 255, 0.28), inset 0 -2px 0 0 rgba(90, 190, 255, 0.65); }
+}
+.pdf-highlight--flash {
+  animation: highlight-flash-v2 0.80s cubic-bezier(0.22, 1, 0.36, 1) forwards !important;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   AI EXPLANATION BLOCK — loading / error states
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* Loading variant */
+.annotation-ai-block--loading {
+  border-color: rgba(90, 190, 255, 0.12);
+  background:   rgba(90, 190, 255, 0.04);
+}
+
+/* Error variant */
+.annotation-ai-block--error {
+  border-color: rgba(224, 92, 92, 0.22);
+  background:   rgba(224, 92, 92, 0.05);
+}
+
+.annotation-ai-error-text {
+  font-size: 11.5px;
+  color: var(--red);
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Skeleton shimmer rows — replaces plain typing dots during loading */
+.annotation-ai-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 2px 0;
+}
+
+.annotation-ai-shimmer {
+  width: 100%;
+  height: 11px;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    rgba(90, 190, 255, 0.07) 0%,
+    rgba(90, 190, 255, 0.22) 40%,
+    rgba(90, 190, 255, 0.07) 80%
+  );
+  background-size: 300% 100%;
+  animation: skeleton-wave 1.6s ease-in-out infinite;
+}
+.annotation-ai-shimmer--md { width: 78%; }
+.annotation-ai-shimmer--sm { width: 52%; }
+
+@keyframes skeleton-wave {
+  0%   { background-position: 100% 50%; }
+  100% { background-position:  -100% 50%; }
+}
+
+/* Re-explain button loading state label alignment */
+.annotation-btn--reexplain .spinner--xs {
+  margin-right: 2px;
+  vertical-align: middle;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   CHAT ↔ PDF BIDIRECTIONAL LINK
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* Linked bubble — subtle hover glow to hint at interactivity */
+.msg-bubble--linked {
+  cursor: default; /* bubble itself is not clickable; only the button is */
+  transition: border-color 180ms ease;
+}
+
+/* ↗ View in PDF button inside the explain badge */
+.msg-pdf-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  color: rgba(90, 190, 255, 0.85);
+  background: transparent;
+  border: 1px solid rgba(90, 190, 255, 0.28);
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.msg-pdf-link:hover {
+  background:   rgba(90, 190, 255, 0.12);
+  border-color: rgba(90, 190, 255, 0.55);
+  color:        rgba(90, 190, 255, 1);
+}
+
+/* Badge row: keep label + button on same line */
+.msg-explain-badge {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
