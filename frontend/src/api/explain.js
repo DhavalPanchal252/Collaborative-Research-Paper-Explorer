@@ -1,14 +1,15 @@
 // src/api/explain.js
-// Mirrors the pattern of chat.js — same BASE_URL, same error handling.
+// Phase 4: updated to consume structured response { answer, source_chunks, confidence }
+// (backend /explain-selection now returns this shape instead of { explanation })
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
 /**
  * Send selected PDF text for plain-English explanation.
  *
- * @param {string} selectedText  - Text highlighted by the user in the PDF.
- * @param {"groq"|"ollama"} model - LLM backend to use.
- * @returns {Promise<{ explanation: string }>}
+ * @param {string} selectedText       - Text highlighted by the user in the PDF.
+ * @param {"groq"|"ollama"} model     - LLM backend to use.
+ * @returns {Promise<{ answer: string, source_chunks: string[], confidence: number }>}
  */
 export async function explainSelection(selectedText, model = "groq") {
   const res = await fetch(`${BASE_URL}/explain-selection`, {
@@ -29,5 +30,6 @@ export async function explainSelection(selectedText, model = "groq") {
     throw new Error(message);
   }
 
-  return res.json(); // { explanation: "..." }
+  // Phase 4: backend now returns { answer, source_chunks, confidence }
+  return res.json();
 }

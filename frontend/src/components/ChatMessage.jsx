@@ -27,6 +27,15 @@ export default function ChatMessage({ role, content, source }) {
 
 // ✅ KEEP YOUR EXISTING FORMATTER (VERY GOOD)
 function FormattedContent({ content }) {
+  // 🔥 SAFETY GUARD
+  if (!content || typeof content !== "string") {
+    return (
+      <div className="msg-content msg-content--empty">
+        ⚠ No response available
+      </div>
+    );
+  }
+
   const parts = content.split(/(```[\s\S]*?```)/g);
 
   return (
@@ -54,7 +63,10 @@ function FormattedContent({ content }) {
 }
 
 function inlineFormat(text) {
+  if (!text || typeof text !== "string") return null;
+
   const segments = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+
   return segments.map((seg, i) => {
     if (seg.startsWith("**") && seg.endsWith("**")) {
       return <strong key={i}>{seg.slice(2, -2)}</strong>;

@@ -1,4 +1,7 @@
 // src/App.jsx
+// Phase 4: explainResult is now passed to PDFViewer so highlights
+// can receive and store their AI explanations.
+
 import { useState, useCallback } from "react";
 import UploadPanel from "./components/UploadPanel";
 import ChatPanel from "./components/ChatPanel";
@@ -12,13 +15,18 @@ import { uploadPDF } from "./api/upload";
 import { explainSelection } from "./api/explain";
 
 export default function App() {
-  const [uploadedFile, setUploadedFile] = useState(null);
-  const [uploadMeta, setUploadMeta] = useState(null);
-  const [model, setModel] = useState("groq");
-  const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState(null);
+  const [uploadedFile, setUploadedFile]   = useState(null);
+  const [uploadMeta, setUploadMeta]       = useState(null);
+  const [model, setModel]                 = useState("groq");
+  const [uploading, setUploading]         = useState(false);
+  const [uploadError, setUploadError]     = useState(null);
   const [explainLoading, setExplainLoading] = useState(false);
+
+  // Chat injection (unchanged from Phase 3)
   const [injectMessage, setInjectMessage] = useState(null);
+
+  // Phase 4: structured result routed back to PDFViewer for highlight attachment
+  const [explainResult, setExplainResult] = useState(null);
 
   async function handleUpload(file) {
     setUploading(true);
@@ -41,21 +49,47 @@ export default function App() {
     setUploadMeta(null);
     setUploadError(null);
     setInjectMessage(null);
+    setExplainResult(null);
   }
 
+  // ── Phase 4: explain flow ─────────────────────────────────────────────────
+  // Sends selected text to the backend, then:
+  //   1. Injects question + answer into ChatPanel (existing behavior)
+  //   2. Sets explainResult so PDFViewer can attach the answer to the highlight
   const handleExplainRequest = useCallback(
     async (selectedText) => {
       if (!selectedText || explainLoading) return;
+
       setExplainLoading(true);
-      const userQuestion = `✦ Explain: "${selectedText.slice(0, 120)}${selectedText.length > 120 ? "…" : ""}"`;
+
+      const userQuestion = `✦ Explain: "${selectedText.slice(0, 120)}${
+        selectedText.length > 120 ? "…" : ""
+      }"`;
+
       try {
-        const { explanation } = await explainSelection(selectedText, model);
-        setInjectMessage({ question: userQuestion, answer: explanation });
-      } catch (err) {
+        // explainSelection now returns { answer, source_chunks, confidence }
+        const { answer, source_chunks, confidence } = await explainSelection(
+          selectedText,
+          model
+        );
+
+        // 1. Inject into chat panel
         setInjectMessage({
           question: userQuestion,
-          answer: `⚠ Could not explain: ${err.message || "Unknown error"}`,
+          answer: answer || "⚠ No response from model"
         });
+
+        // 2. Pass structured result to PDFViewer for highlight attachment
+        setExplainResult({ text: selectedText, answer, source_chunks, confidence });
+
+      } catch (err) {
+        const errorMsg = `⚠ Could not explain: ${err.message || "Unknown error"}`;
+
+        // Still inject error message into chat so the user sees feedback
+        setInjectMessage({ question: userQuestion, answer: errorMsg });
+
+        // Pass error result so PDFViewer can clear the loading spinner
+        setExplainResult({ text: selectedText, answer: errorMsg });
       } finally {
         setExplainLoading(false);
       }
@@ -63,18 +97,12 @@ export default function App() {
     [model, explainLoading]
   );
 
-  const handleInjectConsumed = useCallback(() => setInjectMessage(null), []);
+  const handleInjectConsumed      = useCallback(() => setInjectMessage(null),  []);
+  const handleExplainResultConsumed = useCallback(() => setExplainResult(null), []);
 
   const hasPaper = !!uploadedFile;
 
-  /* ─── PAPER LOADED ─────────────────────────────────────────────────────────
-     .app-paper-layout  → flex-column, 100vh
-       <Header />        → full-width, 60px, shrink 0
-       .app-paper-body   → flex:1, flex-row, overflow hidden
-         <aside.sidebar> → 280px fixed, existing styles unchanged
-         .paper-pdf      → flex:1, overflow hidden (PDF viewer)
-         .paper-chat     → 380px fixed, overflow hidden (chat)
-  ─────────────────────────────────────────────────────────────────────────── */
+  /* ─── PAPER LOADED ──────────────────────────────────────────────────────── */
   if (hasPaper) {
     return (
       <div className="app-paper-layout">
@@ -118,6 +146,8 @@ export default function App() {
               file={uploadedFile}
               onExplainRequest={handleExplainRequest}
               explainLoading={explainLoading}
+              explainResult={explainResult}                       // Phase 4
+              onExplainResultConsumed={handleExplainResultConsumed} // Phase 4
             />
           </div>
 
@@ -136,7 +166,7 @@ export default function App() {
     );
   }
 
-  /* ─── NO PAPER: original home screen, pixel-perfect unchanged ─── */
+  /* ─── NO PAPER: home screen (unchanged) ─────────────────────────────────── */
   return (
     <div className="app-shell">
       <aside className="sidebar">

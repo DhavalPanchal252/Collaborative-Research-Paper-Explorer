@@ -1,6 +1,6 @@
 // src/components/PDFViewer.jsx
-// Phase 3: Annotation System — Notes + Interaction Layer
-// Highlights are now interactive entities with metadata.
+// Phase 4: AI-Linked Highlight Intelligence System
+// Each highlight is now a knowledge node: text → note → aiExplanation
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
@@ -37,66 +37,59 @@ const MODE_CURSOR = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AnnotationPopup
-// Appears at fixed (clientX, clientY) of the click that opened it.
-// Closes on: outside click, save, delete, X button.
+// AnnotationPopup — Phase 4: shows AI explanation + Re-explain button
 // ─────────────────────────────────────────────────────────────────────────────
-function AnnotationPopup({ highlight, onSave, onDelete, onClose }) {
-  const [note, setNote]     = useState(highlight.note ?? "");
-  const popupRef            = useRef(null);
-  const textareaRef         = useRef(null);
+function AnnotationPopup({
+  highlight,
+  onSave,
+  onDelete,
+  onClose,
+  onReExplain,   // Phase 4: (highlight) => void
+  explainLoading, // Phase 4: global explain-in-flight flag
+}) {
+  const [note, setNote]  = useState(highlight.note ?? "");
+  const popupRef         = useRef(null);
+  const textareaRef      = useRef(null);
 
-  // Auto-focus textarea on open
   useEffect(() => { textareaRef.current?.focus(); }, []);
 
   // Close on outside click
   useEffect(() => {
     function onMouseDown(e) {
-      if (popupRef.current && !popupRef.current.contains(e.target)) {
-        onClose();
-      }
+      if (popupRef.current && !popupRef.current.contains(e.target)) onClose();
     }
-    // Slight delay so the click that opened the popup doesn't immediately close it
     const t = setTimeout(() => document.addEventListener("mousedown", onMouseDown), 10);
-    return () => {
-      clearTimeout(t);
-      document.removeEventListener("mousedown", onMouseDown);
-    };
+    return () => { clearTimeout(t); document.removeEventListener("mousedown", onMouseDown); };
   }, [onClose]);
 
-  // Compute safe popup position — clamp to viewport edges
-  const px = Math.min(highlight.position.x, window.innerWidth  - 300);
-  const py = Math.min(highlight.position.y, window.innerHeight - 220);
+  const px = Math.min(highlight.position?.x ?? 100, window.innerWidth - 320);
+  const py = Math.min(highlight.position?.y ?? 100, window.innerHeight - 320);
 
   function handleSave() {
-    if (!note.trim()) return;  // 🛑 prevent empty save
-
+    if (!note.trim()) return;
     onSave(highlight.id, note);
     onClose();
   }
 
   function handleDelete() {
     onDelete(highlight.id);
-    // onClose is called inside handleDeleteHighlight
   }
+
+  // Phase 4: is AI currently working on THIS highlight?
+  const isThisLoading = highlight.aiLoading || (explainLoading && !highlight.aiExplanation);
 
   return (
     <div
       ref={popupRef}
       className="annotation-popup"
       style={{ left: px, top: py }}
-      // Prevent any click inside popup from bubbling to the PDF layer
       onMouseDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
     >
       {/* Header */}
       <div className="annotation-popup-header">
         <span className="annotation-popup-label">✦ Note</span>
-        <button
-          className="annotation-popup-close"
-          onClick={onClose}
-          aria-label="Close"
-        >✕</button>
+        <button className="annotation-popup-close" onClick={onClose} aria-label="Close">✕</button>
       </div>
 
       {/* Selected text preview */}
@@ -106,27 +99,69 @@ function AnnotationPopup({ highlight, onSave, onDelete, onClose }) {
           : highlight.text}"
       </p>
 
+      {/* ── Phase 4: AI Explanation block ─────────────────────────────────── */}
+      <div className="annotation-ai-block">
+      <div className="annotation-ai-header">
+        <span className="annotation-ai-label">✦ AI Explanation</span>
+
+        <button
+          className="annotation-btn annotation-btn--reexplain"
+          onClick={() => onReExplain(highlight)}
+          disabled={isThisLoading || explainLoading}
+          title="Re-generate explanation"
+        >
+          {isThisLoading ? (
+            <>
+              <span className="spinner spinner--xs" />
+              Generating...
+            </>
+          ) : (
+            "↺ Re-explain"
+          )}
+        </button>
+        </div>
+
+        {isThisLoading ? (
+          <div className="annotation-ai-loading">
+            <span className="typing-dot" />
+            <span className="typing-dot" />
+            <span className="typing-dot" />
+          </div>
+        ) : highlight.aiExplanation ? (
+          <p className="annotation-ai-text">{highlight.aiExplanation}</p>
+        ) : (
+          <p className="annotation-ai-empty">
+            No explanation yet.{" "}
+            <button
+              className="annotation-ai-trigger-link"
+              onClick={() => onReExplain(highlight)}
+              disabled={explainLoading}
+            >
+              Generate one →
+            </button>
+          </p>
+        )}
+      </div>
+
       {/* Note textarea */}
       <textarea
         ref={textareaRef}
         className="annotation-popup-textarea"
-        placeholder="Add a note…"
+        placeholder="Add a personal note…"
         value={note}
         onChange={(e) => setNote(e.target.value)}
-        rows={4}
+        rows={3}
       />
 
       {/* Actions */}
       <div className="annotation-popup-actions">
-        <button
-          className="annotation-btn annotation-btn--delete"
-          onClick={handleDelete}
-        >
+        <button className="annotation-btn annotation-btn--delete" onClick={handleDelete}>
           Delete
         </button>
         <button
           className="annotation-btn annotation-btn--save"
           onClick={handleSave}
+          disabled={!note.trim()}
         >
           Save note
         </button>
@@ -136,43 +171,51 @@ function AnnotationPopup({ highlight, onSave, onDelete, onClose }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HighlightLayer — Phase 3: highlights are clickable; annotated ones differ
+// HighlightLayer — Phase 4: ai class + flash animation
 // ─────────────────────────────────────────────────────────────────────────────
-function HighlightLayer({ highlights, onHighlightClick, mode }) {
+function HighlightLayer({ highlights, onHighlightClick, mode, flashingId }) {
   if (!highlights.length) return null;
 
-  // Highlights are only clickable when NOT in highlight/annotate capture mode
   const interactive = mode === "select";
 
   return (
     <div className="pdf-highlight-layer" aria-hidden="true">
       {highlights.map((h) =>
-        h.rects.map((rect, ri) => (
-          <div
-            key={`${h.id}-${ri}`}
-            className={`pdf-highlight${h.note ? " pdf-highlight--noted" : ""}`}
-            style={{
-              left:          rect.x,
-              top:           rect.y,
-              width:         rect.width,
-              height:        rect.height,
-              // Only first rect of each highlight is the click target
-              // (avoids duplicate popups for multi-line highlights)
-              pointerEvents: interactive && ri === 0 ? "auto" : "none",
-              cursor:        interactive && ri === 0 ? "pointer" : "default",
-            }}
-            onClick={interactive && ri === 0
-              ? (e) => { e.stopPropagation(); onHighlightClick(e, h); }
-              : undefined}
-          />
-        ))
+        h.rects.map((rect, ri) => {
+          // Build class list for Phase 4 states
+          const classes = [
+            "pdf-highlight",
+            h.note          ? "pdf-highlight--noted" : "",
+            h.aiExplanation ? "pdf-highlight--ai"    : "",
+            h.aiLoading     ? "pdf-highlight--loading": "",
+            flashingId === h.id ? "pdf-highlight--flash" : "",
+          ].filter(Boolean).join(" ");
+
+          return (
+            <div
+              key={`${h.id}-${ri}`}
+              className={classes}
+              style={{
+                left:          rect.x,
+                top:           rect.y,
+                width:         rect.width,
+                height:        rect.height,
+                pointerEvents: interactive && ri === 0 ? "auto" : "none",
+                cursor:        interactive && ri === 0 ? "pointer" : "default",
+              }}
+              onClick={interactive && ri === 0
+                ? (e) => { e.stopPropagation(); onHighlightClick(e, h); }
+                : undefined}
+            />
+          );
+        })
       )}
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SelectionTooltip — unchanged
+// SelectionTooltip — unchanged from Phase 3
 // ─────────────────────────────────────────────────────────────────────────────
 function SelectionTooltip({ position, onExplain, onDismiss, loading }) {
   if (!position) return null;
@@ -199,28 +242,39 @@ function SelectionTooltip({ position, onExplain, onDismiss, loading }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PDFViewer
+// PDFViewer — Phase 4 props: explainResult + onExplainResultConsumed
 // ─────────────────────────────────────────────────────────────────────────────
-export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
-  const [numPages, setNumPages]           = useState(null);
-  const [loadError, setLoadError]         = useState(null);
-  const [tooltipPos, setTooltipPos]       = useState(null);
-  const [selectedText, setSelectedText]   = useState("");
+export default function PDFViewer({
+  file,
+  onExplainRequest,
+  explainLoading,
+  explainResult,           // Phase 4: { text, answer } | null — from App
+  onExplainResultConsumed, // Phase 4: () => void
+}) {
+  const [numPages, setNumPages]       = useState(null);
+  const [loadError, setLoadError]     = useState(null);
+  const [tooltipPos, setTooltipPos]   = useState(null);
+  const [selectedText, setSelectedText] = useState("");
 
   // Phase 0
   const [mode, setMode] = useState("select");
   const [zoom, setZoom] = useState(1);
 
   // Phase 2
-  const [highlights, setHighlights]       = useState([]);
+  const [highlights, setHighlights]   = useState([]);
 
   // Phase 3
-  const [activeHighlight, setActiveHighlight] = useState(null); // { ...highlight, position:{x,y} }
+  const [activeHighlight, setActiveHighlight] = useState(null);
+
+  // Phase 4
+  const [flashingId, setFlashingId]   = useState(null);
+  const pendingExplainIdRef           = useRef(null); // tracks highlight awaiting AI
+  const lastRangeRef                  = useRef(null); // stores selection range for Explain
 
   const containerRef  = useRef(null);
   const scrollAreaRef = useRef(null);
 
-  // ── Mode change ──────────────────────────────────────────────────────────
+  // ── Mode change ────────────────────────────────────────────────────────────
   function handleModeChange(next) {
     setMode(next);
     setTooltipPos(null);
@@ -231,20 +285,18 @@ export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
 
   // ── Phase 3: highlight clicked → open popup ──────────────────────────────
   function handleHighlightClick(e, highlight) {
-    // 🛑 prevent reopening same popup
     if (activeHighlight?.id === highlight.id) return;
-
     setActiveHighlight({
       ...highlight,
       position: { x: e.clientX + 12, y: e.clientY + 12 },
     });
   }
 
-  // ── Phase 3: save note to highlight ─────────────────────────────────────
+  // ── Phase 3: save note ───────────────────────────────────────────────────
   function handleSaveNote(id, note) {
-    setHighlights((prev) =>
-      prev.map((h) => h.id === id ? { ...h, note } : h)
-    );
+    setHighlights((prev) => prev.map((h) => h.id === id ? { ...h, note } : h));
+    // Sync activeHighlight so popup re-renders with new note
+    setActiveHighlight((prev) => prev?.id === id ? { ...prev, note } : prev);
   }
 
   // ── Phase 3: delete highlight ────────────────────────────────────────────
@@ -253,68 +305,189 @@ export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
     setActiveHighlight(null);
   }
 
-  // ── Phase 2: capture selection → highlight ───────────────────────────────
-  function captureHighlightFromRange(range, text) {
-    if (!scrollAreaRef.current) return;
+  // ── Phase 4: create highlight and return its ID ──────────────────────────
+  function createHighlightFromRange(range, text) {
+    if (!scrollAreaRef.current) return null;
 
     const rawRects = Array.from(range.getClientRects());
-
     const rects = rawRects
       .filter((r) => r.width > 1 && r.height > 1)
       .map((r) => toScrollAreaCoords(r, scrollAreaRef.current));
 
-    if (!rects.length) return;
+    if (!rects.length) return null;
 
-    setHighlights(prev => [
+    const newId = uid();
+    setHighlights((prev) => [
       ...prev,
       {
-        id: uid(),
+        id:            newId,
         text,
         rects,
-        note: "",
-        createdAt: new Date(),
-      }
+        note:          "",
+        aiExplanation: null, // Phase 4
+        aiLoading:     false, // Phase 4
+        createdAt:     new Date(),
+      },
     ]);
 
     window.getSelection()?.removeAllRanges();
+    return newId;
+  }
+
+  // ── Phase 4: "Re-explain" from AnnotationPopup ──────────────────────────
+  function handleReExplain(highlight) {
+    if (explainLoading) return;
+
+    pendingExplainIdRef.current = highlight.id;
+
+    setHighlights((prev) =>
+      prev.map((h) =>
+        h.id === highlight.id
+          ? { ...h, aiLoading: true }
+          : h
+      )
+    );
+
+    // ✅ DO NOT CLOSE POPUP
+
+    onExplainRequest(highlight.text);
+  }
+
+  // ── Phase 4: consume explainResult from App ──────────────────────────────
+
+  // 🔥 Timeout safety (10s fallback)
+  useEffect(() => {
+    if (!pendingExplainIdRef.current) return;
+
+    const timeout = setTimeout(() => {
+      console.warn("Explain timeout — resetting loading state");
+
+      setHighlights(prev => {
+        if (!pendingExplainIdRef.current) return prev;
+
+        return prev.map(h =>
+          h.id === pendingExplainIdRef.current
+            ? { ...h, aiLoading: false }
+            : h
+        );
+      });
+
+      pendingExplainIdRef.current = null;
+    }, 10000); // 10 sec
+
+    return () => clearTimeout(timeout);
+  }, [highlights]);
+
+  useEffect(() => {
+    if (!explainResult) return;
+
+    const { text, answer } = explainResult;
+
+    // Guard: don't attach empty responses
+    if (!answer || typeof answer !== "string" || answer.trim().length < 5) {
+      setHighlights(prev =>
+        prev.map(h =>
+          h.id === pendingExplainIdRef.current
+            ? { ...h, aiLoading: false }
+            : h
+        )
+      );
+
+      pendingExplainIdRef.current = null;
+      onExplainResultConsumed?.();
+      return;
+    }
+
+    const targetId = pendingExplainIdRef.current;
+
+    setHighlights((prev) =>
+      prev.map((h) => {
+        // Primary match: exact ID (most accurate — handles duplicate text)
+        if (targetId && h.id === targetId) {
+          return { ...h, aiExplanation: answer, aiLoading: false };
+        }
+        // Fallback: first un-explained highlight with matching text
+        if (!targetId && h.text === text && !h.aiExplanation) {
+          return { ...h, aiExplanation: answer, aiLoading: false };
+        }
+        return h;
+      })
+    );
+
+    // Flash and scroll to the updated highlight
+    if (targetId) {
+      setFlashingId(targetId);
+      setTimeout(() => setFlashingId(null), 1400);
+    }
+
+    pendingExplainIdRef.current = null;
+    onExplainResultConsumed?.();
+  }, [explainResult]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Phase 4: scroll to flashing highlight ───────────────────────────────
+  useEffect(() => {
+    if (!flashingId || !scrollAreaRef.current) return;
+
+    const target = highlights.find((h) => h.id === flashingId);
+    if (target?.rects?.[0]) {
+      scrollAreaRef.current.scrollTo({
+        top:      Math.max(0, target.rects[0].y - 120),
+        behavior: "smooth",
+      });
+    }
+  }, [flashingId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Phase 4: keep activeHighlight in sync after state updates ───────────
+  // (so the popup immediately reflects aiExplanation changes)
+  useEffect(() => {
+    if (!activeHighlight) return;
+
+    setActiveHighlight(prev => {
+      const updated = highlights.find(h => h.id === prev.id);
+      if (!updated) return null;
+
+      return {
+        ...updated,
+        position: prev.position
+      };
+    });
+  }, [highlights]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Phase 2: capture highlight in highlight mode ─────────────────────────
+  // (kept for highlight-mode mouseUp, same as Phase 3)
+  function captureHighlightFromRange(range, text) {
+    createHighlightFromRange(range, text);
   }
 
   // ── Unified mouseUp ──────────────────────────────────────────────────────
   const handleMouseUp = useCallback(() => {
-
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) return;
 
-    const range = selection.getRangeAt(0).cloneRange(); // ✅ ONLY THIS
-    const text = selection.toString().trim();
+    const range = selection.getRangeAt(0).cloneRange();
+    const text  = selection.toString().trim();
 
     setTimeout(() => {
-
       if (mode === "annotate") return;
-
       if (!text || text.length < 5) {
         setTooltipPos(null);
         setSelectedText("");
         return;
       }
-
-      // ✅ use cloned range ONLY
       if (!containerRef.current?.contains(range.commonAncestorContainer)) return;
 
       if (mode === "select") {
         const rect = range.getBoundingClientRect();
         setSelectedText(text);
         setTooltipPos({ x: rect.left + rect.width / 2, y: rect.top });
-
+        lastRangeRef.current = range; // Phase 4: store for Explain
       } else if (mode === "highlight") {
         captureHighlightFromRange(range, text);
       }
-
     }, 10);
-
   }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Annotate click ───────────────────────────────────────────────────────
+  // ── Annotate click ────────────────────────────────────────────────────────
   const handleClick = useCallback((e) => {
     if (mode !== "annotate") return;
     if (e.target.closest(".selection-tooltip")) return;
@@ -336,15 +509,10 @@ export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
   }, [handleMouseDown]);
 
   useEffect(() => {
-    function handleScroll() {
-      setActiveHighlight(null);
-    }
-
     const el = scrollAreaRef.current;
     if (!el) return;
-
+    const handleScroll = () => setActiveHighlight(null);
     el.addEventListener("scroll", handleScroll);
-
     return () => el.removeEventListener("scroll", handleScroll);
   }, []);
 
@@ -356,8 +524,44 @@ export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
     }
   }, [explainLoading]);
 
+  // ── Phase 4: Explain button clicked in select mode ───────────────────────
   function handleExplain() {
-    if (!selectedText) return;
+    if (!selectedText || explainLoading) return;
+
+    // Find existing highlight with same text, or create a new one
+    let existing = null;
+
+    if (lastRangeRef.current && scrollAreaRef.current) {
+      const rawRects = Array.from(lastRangeRef.current.getClientRects());
+
+      const newRects = rawRects
+        .filter(r => r.width > 1 && r.height > 1)
+        .map(r => toScrollAreaCoords(r, scrollAreaRef.current));
+
+      existing = highlights.find(h =>
+        h.text === selectedText &&
+        JSON.stringify(h.rects) === JSON.stringify(newRects)
+      );
+    }
+
+    if (existing) {
+      // Reuse existing highlight — just request a fresh explanation
+      pendingExplainIdRef.current = existing.id;
+      setHighlights((prev) =>
+        prev.map((h) => h.id === existing.id ? { ...h, aiLoading: true } : h)
+      );
+    } else if (lastRangeRef.current) {
+      // Create new highlight and link the pending explain to it
+      const newId = createHighlightFromRange(lastRangeRef.current, selectedText);
+      if (newId) {
+        pendingExplainIdRef.current = newId;
+        // Mark as loading immediately
+        setHighlights((prev) =>
+          prev.map((h) => h.id === newId ? { ...h, aiLoading: true } : h)
+        );
+      }
+    }
+
     onExplainRequest(selectedText);
   }
 
@@ -433,21 +637,24 @@ export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
           </Document>
         )}
 
-        {/* Phase 2+3: highlight overlay */}
+        {/* Phase 2+3+4: highlight overlay */}
         <HighlightLayer
           highlights={highlights}
           onHighlightClick={handleHighlightClick}
           mode={mode}
+          flashingId={flashingId}   // Phase 4
         />
       </div>
 
-      {/* Phase 3: annotation popup — fixed position, outside scroll area */}
+      {/* Phase 3+4: annotation popup */}
       {activeHighlight && (
         <AnnotationPopup
           highlight={activeHighlight}
           onSave={handleSaveNote}
           onDelete={handleDeleteHighlight}
           onClose={() => setActiveHighlight(null)}
+          onReExplain={handleReExplain}   // Phase 4
+          explainLoading={explainLoading} // Phase 4
         />
       )}
 

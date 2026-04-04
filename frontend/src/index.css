@@ -1382,3 +1382,211 @@ textarea { font-family: inherit; font-size: inherit; }
   background: rgba(232, 160, 74, 0.22);
   border-color: rgba(232, 160, 74, 0.5);
 }
+/* ─────────────────────────────────────────────────────────────────────────────
+   PHASE 4 — AI-Linked Highlight Intelligence System
+   Appended to bottom of index.css — zero existing rules modified.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+
+/* ── Popup width: slightly wider to fit AI explanation text ── */
+.annotation-popup {
+  width: 300px;
+}
+
+
+/* ══════════════════════════════════════════════════════════════
+   HIGHLIGHT STATES
+   ══════════════════════════════════════════════════════════════ */
+
+/* AI-enhanced: blue tint + bottom border mark */
+.pdf-highlight--ai {
+  background: rgba(90, 190, 255, 0.22);
+  box-shadow:
+    0 0 0 1px rgba(90, 190, 255, 0.28),
+    inset 0 -2px 0 0 rgba(90, 190, 255, 0.65);
+}
+
+/* AI-enhanced + annotated: keep both visual signals */
+.pdf-highlight--noted.pdf-highlight--ai {
+  background: rgba(120, 200, 255, 0.24);
+  box-shadow:
+    0 0 0 1px rgba(90, 190, 255, 0.35),
+    inset 0 -2px 0 0 rgba(90, 190, 255, 0.65);
+}
+
+/* Hover on AI highlight */
+.pdf-highlight--ai:hover {
+  background: rgba(90, 190, 255, 0.36);
+  box-shadow:
+    0 0 0 1.5px rgba(90, 190, 255, 0.5),
+    inset 0 -2px 0 0 rgba(90, 190, 255, 0.8);
+}
+.pdf-highlight--loading {
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(255, 220, 80, 0.25),
+    rgba(255, 220, 80, 0.25) 6px,
+    rgba(255, 220, 80, 0.45) 6px,
+    rgba(255, 220, 80, 0.45) 12px
+  );
+  animation: highlight-loading 1s linear infinite;
+}
+
+@keyframes highlight-loading {
+  from { background-position: 0 0; }
+  to   { background-position: 24px 0; }
+}
+/* Loading: pulsing opacity while AI is working */
+.pdf-highlight--loading {
+  opacity: 0.55;
+  animation: highlight-pulse 1s ease-in-out infinite;
+}
+
+@keyframes highlight-pulse {
+  0%,  100% { opacity: 0.55; }
+  50%        { opacity: 0.90; }
+}
+
+/* Flash: fires once when the AI response arrives and attaches */
+@keyframes highlight-flash {
+  0%   { background: rgba(255, 210, 70,  0.55); box-shadow: 0 0 0 2px rgba(255, 200, 50, 0.5); }
+  45%  { background: rgba(90,  190, 255, 0.48); box-shadow: 0 0 0 2px rgba(90, 190, 255, 0.5); }
+  100% { background: rgba(90,  190, 255, 0.22); box-shadow: 0 0 0 1px rgba(90, 190, 255, 0.28), inset 0 -2px 0 0 rgba(90, 190, 255, 0.65); }
+}
+
+.pdf-highlight--flash {
+  animation: highlight-flash 0.75s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+
+/* ══════════════════════════════════════════════════════════════
+   ANNOTATION POPUP — AI EXPLANATION BLOCK
+   ══════════════════════════════════════════════════════════════ */
+
+.annotation-ai-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: rgba(90, 190, 255, 0.06);
+  border: 1px solid rgba(90, 190, 255, 0.18);
+  border-radius: var(--radius);
+}
+
+/* Row: label left, re-explain button right */
+.annotation-ai-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.annotation-ai-label {
+  font-size: 10px;
+  letter-spacing: 1.2px;
+  font-weight: 600;
+  color: rgba(90, 190, 255, 0.80);
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+/* The AI explanation prose */
+.annotation-ai-text {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text);
+  margin: 0;
+  /* clamp long explanations to 6 lines; user can read full in chat */
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Loading dots inside the AI block */
+.annotation-ai-loading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0 1px;
+  min-height: 20px;
+}
+
+/* "No explanation yet. Generate one →" placeholder */
+.annotation-ai-empty {
+  font-size: 11.5px;
+  color: var(--text-3);
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Inline text link to trigger first explanation */
+.annotation-ai-trigger-link {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  cursor: pointer;
+  color: rgba(90, 190, 255, 0.80);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color var(--transition);
+}
+
+.annotation-ai-trigger-link:hover:not(:disabled) {
+  color: rgba(90, 190, 255, 1);
+}
+
+.annotation-ai-trigger-link:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  text-decoration: none;
+}
+
+
+/* ══════════════════════════════════════════════════════════════
+   RE-EXPLAIN BUTTON  (sits in .annotation-ai-header)
+   ══════════════════════════════════════════════════════════════ */
+
+.annotation-btn--reexplain {
+  /* Override the shared .annotation-btn flex:1 so this button stays compact */
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  color: rgba(90, 190, 255, 0.85);
+  background: transparent;
+  border: 1px solid rgba(90, 190, 255, 0.28);
+  transition:
+    background var(--transition),
+    border-color var(--transition),
+    color var(--transition);
+}
+
+.annotation-btn--reexplain:hover:not(:disabled) {
+  background: rgba(90, 190, 255, 0.10);
+  border-color: rgba(90, 190, 255, 0.50);
+  color: rgba(90, 190, 255, 1);
+}
+
+.annotation-btn--reexplain:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+
+/* ══════════════════════════════════════════════════════════════
+   SAVE BUTTON — disabled state (note textarea empty)
+   ══════════════════════════════════════════════════════════════ */
+
+.annotation-btn--save:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
