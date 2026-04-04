@@ -1,24 +1,23 @@
 // src/components/PDFViewer.jsx
+// Phase 1: Mode-Based Interaction System
+// Toolbar mode drives ALL user interaction. No cross-mode bleed.
+
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
+import PDFToolbar from "./PDFToolbar";
 
-// Required: point pdfjs to its worker
-// pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
-
-// ✅ REPLACE WITH THIS (Vite resolves it from node_modules directly)
-// ✅ Correct for react-pdf v10 + Vite
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.min.mjs",
   import.meta.url
 ).toString();
+
 // ─────────────────────────────────────────────────────────────────────────────
-// SelectionTooltip
+// SelectionTooltip — unchanged
 // ─────────────────────────────────────────────────────────────────────────────
 function SelectionTooltip({ position, onExplain, onDismiss, loading }) {
   if (!position) return null;
-
   return (
     <div
       className="selection-tooltip"
@@ -29,7 +28,6 @@ function SelectionTooltip({ position, onExplain, onDismiss, loading }) {
         transform: "translateX(-50%) translateY(-110%)",
         zIndex: 1000,
       }}
-      // Prevent mousedown inside tooltip from clearing selection
       onMouseDown={(e) => e.preventDefault()}
     >
       <button
@@ -38,22 +36,12 @@ function SelectionTooltip({ position, onExplain, onDismiss, loading }) {
         disabled={loading}
       >
         {loading ? (
-          <>
-            <span className="spinner spinner--xs" />
-            Explaining…
-          </>
+          <><span className="spinner spinner--xs" />Explaining…</>
         ) : (
-          <>
-            <span className="tooltip-icon">✦</span>
-            Explain
-          </>
+          <><span className="tooltip-icon">✦</span>Explain</>
         )}
       </button>
-      <button
-        className="tooltip-dismiss-btn"
-        onClick={onDismiss}
-        aria-label="Dismiss"
-      >
+      <button className="tooltip-dismiss-btn" onClick={onDismiss} aria-label="Dismiss">
         ✕
       </button>
     </div>
@@ -61,21 +49,45 @@ function SelectionTooltip({ position, onExplain, onDismiss, loading }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Cursor map — mode → CSS cursor value
+// ─────────────────────────────────────────────────────────────────────────────
+const MODE_CURSOR = {
+  select:    "text",
+  highlight: "crosshair",
+  annotate:  "crosshair",
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // PDFViewer
 // ─────────────────────────────────────────────────────────────────────────────
 export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
-  const [numPages, setNumPages] = useState(null);
-  const [loadError, setLoadError] = useState(null);
-  const [tooltipPos, setTooltipPos] = useState(null);
+  const [numPages, setNumPages]         = useState(null);
+  const [loadError, setLoadError]       = useState(null);
+  const [tooltipPos, setTooltipPos]     = useState(null);
   const [selectedText, setSelectedText] = useState("");
+
+  // ── Phase 0: toolbar state ────────────────────────────────────────────────
+  const [mode, setMode] = useState("select");
+  const [zoom, setZoom] = useState(1);
+
   const containerRef = useRef(null);
 
-  // ── Track text selection ──────────────────────────────────────────────────
+  // ── PHASE 1: Mode change clears any lingering tooltip / selection ─────────
+  function handleModeChange(next) {
+    setMode(next);
+    setTooltipPos(null);
+    setSelectedText("");
+    window.getSelection()?.removeAllRanges();
+  }
+
+  // ── PHASE 1: Unified mouseUp handler — behaviour driven by mode ───────────
   const handleMouseUp = useCallback(() => {
-    // Small delay so the selection is fully committed
     setTimeout(() => {
       const selection = window.getSelection();
       const text = selection?.toString().trim();
+
+      // ── annotate mode: mouseUp is irrelevant, click handler owns it ──────
+      if (mode === "annotate") return;
 
       if (!text || text.length < 5) {
         setTooltipPos(null);
@@ -84,21 +96,38 @@ export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
       }
 
       // Guard: selection must be within the PDF container
+      if (!selection || selection.rangeCount === 0) return;
+
       const range = selection.getRangeAt(0);
-      if (!containerRef.current?.contains(range.commonAncestorContainer)) {
-        return;
+
+      if (!containerRef.current?.contains(range.commonAncestorContainer)) return;
+
+      if (mode === "select") {
+        // ── select: existing explain-tooltip behaviour ─────────────────────
+        const rect = range.getBoundingClientRect();
+        setSelectedText(text);
+        setTooltipPos({ x: rect.left + rect.width / 2, y: rect.top });
+
+      } else if (mode === "highlight") {
+        // ── highlight: capture only, no tooltip ───────────────────────────
+        console.log("Highlight:", text);
+        // Clear browser selection so it doesn't linger
+        window.getSelection()?.removeAllRanges();
       }
-
-      const rect = range.getBoundingClientRect();
-      setSelectedText(text);
-      setTooltipPos({
-        x: rect.left + rect.width / 2,
-        y: rect.top,
-      });
     }, 10);
-  }, []);
+  }, [mode]);
 
-  // Dismiss tooltip when user clicks elsewhere
+  // ── PHASE 1: Click handler — annotate mode only ───────────────────────────
+  const handleClick = useCallback((e) => {
+    if (mode !== "annotate") return;
+    if (!e.target.closest(".pdf-page")) return;
+    if (e.target.closest(".selection-tooltip")) return;
+
+    const { clientX: x, clientY: y } = e;
+    console.log("Annotate at:", { x, y });
+  }, [mode]);
+
+  // ── Dismiss tooltip on mousedown outside it ───────────────────────────────
   const handleMouseDown = useCallback((e) => {
     if (!e.target.closest(".selection-tooltip")) {
       setTooltipPos(null);
@@ -111,7 +140,7 @@ export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
     return () => document.removeEventListener("mousedown", handleMouseDown);
   }, [handleMouseDown]);
 
-  // ── Dismiss tooltip when explainLoading turns false (answer delivered) ─────
+  // ── Dismiss tooltip when explain resolves ─────────────────────────────────
   useEffect(() => {
     if (!explainLoading) {
       setTooltipPos(null);
@@ -120,7 +149,6 @@ export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
     }
   }, [explainLoading]);
 
-  // ── Explain handler ───────────────────────────────────────────────────────
   function handleExplain() {
     if (!selectedText) return;
     onExplainRequest(selectedText);
@@ -145,22 +173,36 @@ export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
 
   if (!file) return null;
 
+  const baseWidth = Math.min(containerRef.current?.clientWidth - 48 || 680, 900);
+  const pageWidth = Math.round(baseWidth * zoom);
+
   return (
     <div className="pdf-viewer" ref={containerRef}>
-      {/* Toolbar */}
-      <div className="pdf-toolbar">
-        <span className="pdf-toolbar-name">
-          <span className="pdf-toolbar-icon">📄</span>
-          {file.name}
-        </span>
-        {numPages && (
-          <span className="pdf-toolbar-pages">{numPages} pages</span>
-        )}
-        <span className="pdf-hint">Select text → Explain</span>
-      </div>
 
-      {/* Document */}
-      <div className="pdf-scroll-area" onMouseUp={handleMouseUp}>
+      {/* ── Toolbar ── */}
+      <PDFToolbar
+        mode={mode}
+        onModeChange={handleModeChange}
+        zoom={zoom}
+        onZoomChange={setZoom}
+        numPages={numPages}
+        currentPage={1}
+        fileName={file.name}
+      />
+
+      {/* ── Document area
+            userSelect blocks browser text selection in highlight/annotate.
+            cursor reflects the active mode.
+      ── */}
+      <div
+        className="pdf-scroll-area"
+        onMouseUp={handleMouseUp}
+        onClick={handleClick}
+        style={{
+          userSelect: mode === "select" ? "text" : "none",
+          cursor: MODE_CURSOR[mode],
+        }}
+      >
         {loadError ? (
           <div className="pdf-load-error">{loadError}</div>
         ) : (
@@ -179,7 +221,7 @@ export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
               <Page
                 key={`page_${i + 1}`}
                 pageNumber={i + 1}
-                width={Math.min(containerRef.current?.clientWidth - 48 || 680, 900)}
+                width={pageWidth}
                 className="pdf-page"
                 renderTextLayer={true}
                 renderAnnotationLayer={false}
@@ -189,13 +231,15 @@ export default function PDFViewer({ file, onExplainRequest, explainLoading }) {
         )}
       </div>
 
-      {/* Floating tooltip */}
-      <SelectionTooltip
-        position={tooltipPos}
-        onExplain={handleExplain}
-        onDismiss={handleDismiss}
-        loading={explainLoading}
-      />
+      {/* ── Tooltip — only rendered in select mode ── */}
+      {mode === "select" && (
+        <SelectionTooltip
+          position={tooltipPos}
+          onExplain={handleExplain}
+          onDismiss={handleDismiss}
+          loading={explainLoading}
+        />
+      )}
     </div>
   );
 }
