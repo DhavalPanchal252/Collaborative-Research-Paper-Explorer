@@ -2200,3 +2200,34 @@ textarea { font-family: inherit; font-size: inherit; }
   background: rgba(255, 80, 80, 0.10);
   border-color: rgba(255, 80, 80, 0.30);
 }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   GROUP HOVER — pdf-highlight--hovered
+   Applied by React to ALL rects of a highlight when ANY rect is hovered.
+   Mirrors every :hover rule exactly so multi-line highlights light up as one.
+   The :hover rules are kept for single-rect highlights and fallback.
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* Base: same as .pdf-highlight:hover */
+.pdf-highlight--hovered {
+  background: rgba(255, 213, 50, 0.78);
+}
+
+/* Noted: same as .pdf-highlight--noted:hover */
+.pdf-highlight--noted.pdf-highlight--hovered {
+  background: rgba(255, 185, 30, 0.80);
+}
+
+/* Error: same as .pdf-highlight--error:hover */
+.pdf-highlight--error.pdf-highlight--hovered {
+  background: rgba(224, 92, 92, 0.32);
+}
+
+/* AI-ready: same as .pdf-highlight--ai:hover */
+.pdf-highlight--ai.pdf-highlight--hovered {
+  background: rgba(90, 190, 255, 0.34);
+  box-shadow:
+    0 0 0 1.5px rgba(90, 190, 255, 0.52),
+    inset 0 -2px 0 0 rgba(90, 190, 255, 0.80);
+  transition: background 120ms ease, box-shadow 120ms ease;
+}

@@ -462,6 +462,11 @@ function HighlightLayer({
   onEraseHover,      // (id) => void — mouse enter in clear mode
   onEraseLeave,      // (id) => void — mouse leave in clear mode
 }) {
+  // hoveredId — tracks which highlight the cursor is currently over.
+  // Used to apply the --hovered class to ALL rects of that highlight
+  // simultaneously, so multi-line highlights light up as a group.
+  const [hoveredId, setHoveredId] = useState(null);
+
   if (!highlights.length) return null;
   const interactive = mode === "select";
   const isClearMode = mode === "clear";
@@ -486,12 +491,19 @@ function HighlightLayer({
             flashingId === h.id ? "pdf-highlight--flash" : "",
             // Clear mode state classes
             isDragTarget    ? "pdf-highlight--erase-target" : "",
+            // Group hover — applied to ALL rects when any rect in this highlight is hovered
+            hoveredId === h.id ? "pdf-highlight--hovered" : "",
           ].filter(Boolean).join(" ");
 
-          // In clear mode every rect is interactive (hover feedback on all rects,
-          // but click-to-delete is on first rect only to avoid double-firing)
-          const isClickTarget  = (interactive && ri === 0) || (isClearMode && ri === 0);
-          const isHoverTarget  = isClearMode;
+          // Every rect in a multi-line highlight is interactive in select mode —
+          // the user should be able to hover or click any line to open the popup.
+          // In clear mode every rect also needs hover + click so erasing works on
+          // all lines, not just the first.
+          // Click fires on any rect but always identifies the highlight by id, so
+          // there is no double-firing — handleHighlightClick is idempotent (toggle).
+          const isSelectInteractive = interactive;   // all rects active in select mode
+          const isClickTarget = isSelectInteractive || (isClearMode && ri === 0);
+          const isHoverTarget = isSelectInteractive || isClearMode;
 
           return (
             <div
@@ -504,13 +516,19 @@ function HighlightLayer({
                 width:  Math.round(rect.width  * z),
                 height: Math.round(rect.height * z),
                 pointerEvents: (isClickTarget || isHoverTarget) ? "auto" : "none",
-                cursor: isClearMode ? "pointer" : (isClickTarget ? "pointer" : "default"),
+                cursor: (isClickTarget || isHoverTarget) ? "pointer" : "default",
               }}
               onClick={isClickTarget
                 ? (e) => { e.stopPropagation(); onHighlightClick(e, h); }
                 : undefined}
-              onMouseEnter={isHoverTarget ? () => onEraseHover?.(h.id) : undefined}
-              onMouseLeave={isHoverTarget ? () => onEraseLeave?.(h.id) : undefined}
+              onMouseEnter={isHoverTarget ? () => {
+                setHoveredId(h.id);
+                if (isClearMode) onEraseHover?.(h.id);
+              } : undefined}
+              onMouseLeave={isHoverTarget ? () => {
+                setHoveredId(null);
+                if (isClearMode) onEraseLeave?.(h.id);
+              } : undefined}
             />
           );
         })
@@ -1066,18 +1084,16 @@ export default function PDFViewer({
     const startX = e.clientX - area.left + scrollEl.scrollLeft;
     const startY = e.clientY - area.top  + scrollEl.scrollTop;
 
-    // Prevent the browser from starting a native text selection on this mousedown.
-    // Without this, dragging across text nodes produces a text selection in
-    // parallel with the erase-box drag — the two fight each other visually.
+    // Stop the browser starting a native text selection from this mousedown.
+    // The PDF text layer is underneath; without this every drag selects text.
     e.preventDefault();
+    // Belt-and-suspenders: lock the whole document for the drag lifetime.
+    // Safari ignores preventDefault for selection in some text-layer contexts.
+    document.body.style.userSelect       = "none";
+    document.body.style.webkitUserSelect = "none";
 
     eraseStartRef.current = { x: startX, y: startY };
     isDraggingRef.current = true;
-
-    // Belt-and-suspenders: lock userSelect on <body> for the entire drag so
-    // any text node that gets mouseentered during the move can't be selected.
-    document.body.style.userSelect       = "none";
-    document.body.style.webkitUserSelect = "none";
 
     function onMove(me) {
       if (!isDraggingRef.current || !eraseStartRef.current) return;
@@ -1123,10 +1139,9 @@ export default function PDFViewer({
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup",   onUp);
 
-      // Restore body text selection — was suppressed for the erase drag.
+      // Restore normal text selection and clear any stray selection from the drag.
       document.body.style.userSelect       = "";
       document.body.style.webkitUserSelect = "";
-      // Clear any accidental selection that formed despite preventDefault
       window.getSelection()?.removeAllRanges();
 
       const targeted = erasingIdsRef.current;
