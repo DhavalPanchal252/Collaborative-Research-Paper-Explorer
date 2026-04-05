@@ -1,12 +1,13 @@
 // src/components/PDFViewer.jsx
-// Phase 4+ Premium UX — smart popup anchoring, scroll sync, bidirectional
-// chat↔PDF linking, shimmer loading, error/retry, full state consistency.
+// Phase 5 — Viewer Controls + Navigation + Annotate Mode
+// Bug fix: highlights now correctly placed at any zoom level (stale closure fix via zoomRef)
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 import PDFToolbar from "./PDFToolbar";
+import AnnotationLayer from "./AnnotationLayer";
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.min.mjs",
@@ -50,6 +51,35 @@ function uid() { return ++_uid; }
  * Width / height ARE divided from 0 — they are page-relative sizes with
  * no centering offset, so plain division is correct for them.
  */
+
+/**
+ * getPageCenterX — reads the horizontal center of the first rendered .pdf-page
+ * element within the scroll area, measured in scroll-area coordinates.
+ *
+ * WHY this instead of scrollAreaEl.clientWidth / 2:
+ *   `.pdf-scroll-area` uses `align-items: center` so pages are flex-centered.
+ *   When a vertical scrollbar is present (content overflows at high zoom),
+ *   `clientWidth` shrinks by the scrollbar width (~6 px on most systems).
+ *   The page, however, is still visually centered against the *full* inner
+ *   width (scrollbar included on some browsers, excluded on others — it depends
+ *   on the OS/browser scrollbar overlay mode).  Using clientWidth/2 as `cx`
+ *   therefore introduces a systematic drift that scales with zoom.
+ *
+ *   Reading the page element's own bounding rect gives us the ground-truth
+ *   center regardless of scrollbar state, container resizes, or zoom level.
+ *   Both capture and render use the same measurement → zero drift.
+ */
+function getPageCenterX(scrollAreaEl) {
+  const pageEl = scrollAreaEl.querySelector(".pdf-page");
+  if (!pageEl) return scrollAreaEl.clientWidth / 2; // fallback before pages render
+
+  const areaRect = scrollAreaEl.getBoundingClientRect();
+  const pageRect = pageEl.getBoundingClientRect();
+
+  // Page center in scroll-area coordinates (account for current scroll position)
+  return pageRect.left - areaRect.left + scrollAreaEl.scrollLeft + pageRect.width / 2;
+}
+
 function toScrollAreaCoords(domRect, scrollAreaEl, zoom = 1) {
   const area = scrollAreaEl.getBoundingClientRect();
   const z    = zoom || 1;
@@ -57,9 +87,9 @@ function toScrollAreaCoords(domRect, scrollAreaEl, zoom = 1) {
   const rawX = domRect.left  - area.left + scrollAreaEl.scrollLeft;
   const rawY = domRect.top   - area.top  + scrollAreaEl.scrollTop;
 
-  // Fixed anchor points (match HighlightLayer's render anchors exactly)
-  const cx = scrollAreaEl.clientWidth / 2;  // horizontal center of scroll area
-  const py = 24;                            // top padding (`.pdf-scroll-area { padding: 24px }`)
+  // cx: use the real page center, not clientWidth/2 — immune to scrollbar drift
+  const cx = getPageCenterX(scrollAreaEl);
+  const py = 24; // top padding (`.pdf-scroll-area { padding: 24px }`)
 
   return {
     x:      Math.round(cx + (rawX - cx) / z),
@@ -71,18 +101,6 @@ function toScrollAreaCoords(domRect, scrollAreaEl, zoom = 1) {
 
 /**
  * mergeRects — consolidates the flood of per-span rects into one rect per line.
- *
- * WHY: getClientRects() returns one rect per text *node*, so a single sentence
- * produces 10-20 tiny rects.  Rendering each individually causes visible gaps,
- * overlapping borders, and uneven colour intensity where rects stack.
- *
- * ALGORITHM:
- *  1. Sort top→bottom, left→right.
- *  2. Group rects whose y-centres are within LINE_TOL px — same visual line.
- *     (PDF.js spans on the same line differ by 1–3 px due to sub-pixel layout.)
- *  3. Union the bounding box per group → one seamless rect per line.
- *  4. Expand ±V_PAD px vertically so the highlight covers full glyph ascenders.
- *  5. Round to integers (see above).
  */
 const LINE_TOL = 4;   // px — y-centre tolerance for "same line"
 const V_PAD    = 1;   // px — vertical expansion per edge
@@ -104,7 +122,7 @@ function mergeRects(rects) {
     const prevCenter = prev.y + prev.height / 2;
     const currCenter = curr.y + curr.height / 2;
 
-    if (Math.abs(prevCenter - currCenter) <= 4) {
+    if (Math.abs(prevCenter - currCenter) <= LINE_TOL) {
       currentLine.push(curr);
     } else {
       lines.push(currentLine);
@@ -117,50 +135,27 @@ function mergeRects(rects) {
   return lines.map(line => {
     const x = Math.min(...line.map(r => r.x));
     const y = Math.min(...line.map(r => r.y));
-    const right = Math.max(...line.map(r => r.x + r.width));
+    const right  = Math.max(...line.map(r => r.x + r.width));
     const bottom = Math.max(...line.map(r => r.y + r.height));
 
     return {
-      x: Math.round(x),
-      y: Math.round(y - 1),
-      width: Math.round(right - x),
-      height: Math.round(bottom - y + 2),
+      x:      Math.round(x),
+      y:      Math.round(y - V_PAD),
+      width:  Math.round(right - x),
+      height: Math.round(bottom - y + V_PAD * 2),
     };
   });
 }
 
 /**
  * overlapsExisting — prevent genuinely stacked/duplicate highlights.
- *
- * WHAT CHANGED AND WHY:
- *
- * Old logic: checked only newRects[0] with a boolean touch test (any x+y
- * bounding-box contact counted as overlap).  This blocked adjacent highlights
- * on the same line because:
- *   • After mergeRects, stored rects have height = lineHeight + 2px (V_PAD).
- *   • Two selections on the same line share identical y-ranges → yOverlap=true.
- *   • Pixel rounding at the shared x-boundary (e.g. right=250, left=250 rounds
- *     to 249/251) caused xOverlap=true even for non-overlapping selections.
- *   → Result: the second selection was silently swallowed.
- *
- * New logic:
- *   1. Check ALL newRects (not just [0]) against ALL stored rects — more accurate
- *      for multi-line selections.
- *   2. Use intersection AREA instead of a boolean touch:
- *        xIntersect = overlap width in px
- *        yIntersect = overlap height in px
- *      Both must exceed OVERLAP_MIN (4 px) to count as a real overlap.
- *      This absorbs ±1-2 px rounding at line/word boundaries while still
- *      catching genuine re-selections of already-highlighted text.
  */
 const OVERLAP_MIN = 4; // px — intersection in both axes required to block
 
 function overlapsExisting(newRects, newText, existing) {
   for (const h of existing) {
-    // Fast path: exact same text → always a duplicate
     if (h.text === newText) return h;
 
-    // Geometric check: any new rect meaningfully overlaps any stored rect?
     for (const nr of newRects) {
       for (const hr of h.rects) {
         const xIntersect = Math.min(nr.x + nr.width,  hr.x + hr.width)
@@ -175,10 +170,8 @@ function overlapsExisting(newRects, newText, existing) {
 }
 
 /**
- * Compute fixed-position {x,y} for the annotation popup anchored to a
- * highlight. Converts scroll-area coords → viewport coords, then clamps.
- *
- * Preference: below-left-aligned → flip above if no room below.
+ * computePopupPosition — fixed-position {x,y} for the annotation popup
+ * anchored to a highlight rect. Converts scroll-area coords → viewport coords.
  */
 function computePopupPosition(highlight, scrollAreaEl, zoom = 1) {
   if (!scrollAreaEl || !highlight?.rects?.[0]) return { x: 120, y: 160 };
@@ -187,9 +180,10 @@ function computePopupPosition(highlight, scrollAreaEl, zoom = 1) {
   const area = scrollAreaEl.getBoundingClientRect();
   const z    = zoom || 1;
 
-  // stored coords are at zoom=1 → scale back to current zoom for viewport mapping
-  const vx = r.x * z + area.left - scrollAreaEl.scrollLeft;
-  const vy = r.y * z + area.top  - scrollAreaEl.scrollTop;
+  const cx = getPageCenterX(scrollAreaEl);
+  const py = 24;
+  const vx = (cx + (r.x - cx) * z) + area.left - scrollAreaEl.scrollLeft;
+  const vy = (py + (r.y - py) * z) + area.top  - scrollAreaEl.scrollTop;
 
   const PW  = 316;
   const PH  = 460;
@@ -197,12 +191,45 @@ function computePopupPosition(highlight, scrollAreaEl, zoom = 1) {
   const GAP = 8;
 
   let x = vx;
-  let y = vy + r.height * z + GAP;  // scale stored height by zoom
+  let y = vy + r.height * z + GAP;
 
-  if (x + PW > window.innerWidth - PAD)  x = window.innerWidth - PW - PAD;
+  if (x + PW > window.innerWidth  - PAD) x = window.innerWidth  - PW - PAD;
   x = Math.max(PAD, x);
 
-  if (y + PH > window.innerHeight - PAD) y = vy - PH - GAP; // flip above
+  if (y + PH > window.innerHeight - PAD) y = vy - PH - GAP;
+  y = Math.max(PAD, y);
+
+  return { x, y };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [Phase 5] computeAnnotationPopupPosition
+// Converts stored annotation point → fixed viewport {x, y} for the popup.
+// Mirrors the AnnotationLayer render formula exactly.
+// ─────────────────────────────────────────────────────────────────────────────
+function computeAnnotationPopupPosition(storedX, storedY, scrollAreaEl, zoom = 1) {
+  if (!scrollAreaEl) return { x: 120, y: 160 };
+
+  const area = scrollAreaEl.getBoundingClientRect();
+  const z    = zoom || 1;
+  const cx   = getPageCenterX(scrollAreaEl);
+  const py   = 24;
+
+  // Inverse of the AnnotationLayer render formula
+  const vx = (cx + (storedX - cx) * z) + area.left - scrollAreaEl.scrollLeft;
+  const vy = (py + (storedY - py) * z) + area.top  - scrollAreaEl.scrollTop;
+
+  const PW  = 280;
+  const PH  = 200;
+  const PAD = 12;
+  const GAP = 12;
+
+  let x = vx - PW / 2; // horizontally centered on marker
+  let y = vy + GAP;    // below marker tip
+
+  if (x + PW > window.innerWidth  - PAD) x = window.innerWidth  - PW - PAD;
+  x = Math.max(PAD, x);
+  if (y + PH > window.innerHeight - PAD) y = vy - PH - GAP;
   y = Math.max(PAD, y);
 
   return { x, y };
@@ -217,18 +244,10 @@ function isHighlightVisible(highlight, scrollAreaEl, zoom = 1, margin = 80) {
   return relTop >= margin && relTop + rect.height * z <= areaH - margin;
 }
 
-
 const MODE_CURSOR = { select: "text", highlight: "text", annotate: "crosshair" };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AnnotationPopup
-//
-// Premium UX:
-//   • Anchored to highlight rects, not click position
-//   • Never closes or flickers during AI loading
-//   • Skeleton shimmer while waiting
-//   • Error state with inline retry
-//   • Outside-click suppressed while loading
 // ─────────────────────────────────────────────────────────────────────────────
 function AnnotationPopup({
   highlight,
@@ -243,7 +262,6 @@ function AnnotationPopup({
 
   useEffect(() => { setNote(highlight.note ?? ""); }, [highlight.note]);
 
-  // Outside-click closes popup — suppressed while AI is loading
   useEffect(() => {
     function onDown(e) {
       if (highlight.aiLoading) return;
@@ -273,7 +291,6 @@ function AnnotationPopup({
       onMouseDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
     >
-      {/* Header */}
       <div className="annotation-popup-header">
         <span className="annotation-popup-label">✦ Annotation</span>
         <button
@@ -284,14 +301,12 @@ function AnnotationPopup({
         >✕</button>
       </div>
 
-      {/* Quote preview */}
       <p className="annotation-popup-quote">
         "{highlight.text.length > 90
           ? highlight.text.slice(0, 90) + "…"
           : highlight.text}"
       </p>
 
-      {/* AI block */}
       <div className={[
         "annotation-ai-block",
         isLoading ? "annotation-ai-block--loading" : "",
@@ -336,7 +351,6 @@ function AnnotationPopup({
         )}
       </div>
 
-      {/* Note textarea */}
       <textarea
         className="annotation-popup-textarea"
         placeholder="Add a personal note…"
@@ -345,7 +359,6 @@ function AnnotationPopup({
         rows={3}
       />
 
-      {/* Actions */}
       <div className="annotation-popup-actions">
         <button
           className="annotation-btn annotation-btn--delete"
@@ -362,18 +375,73 @@ function AnnotationPopup({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// [Phase 5] AnnotationNotePopup — lightweight popup for point-based annotations
+// Reuses all annotation-popup CSS classes for visual consistency.
+// ─────────────────────────────────────────────────────────────────────────────
+function AnnotationNotePopup({ annotation, onSave, onDelete, onClose }) {
+  const [note, setNote] = useState(annotation.note ?? "");
+  const popupRef        = useRef(null);
+  const { x: px, y: py } = annotation.position;
+
+  useEffect(() => { setNote(annotation.note ?? ""); }, [annotation.id]);
+
+  useEffect(() => {
+    function onDown(e) {
+      if (popupRef.current?.contains(e.target)) return;
+      if (e.target.closest(".pdf-annotation-marker")) return; // marker click handled separately
+      onClose();
+    }
+    const t = setTimeout(() => document.addEventListener("mousedown", onDown), 20);
+    return () => { clearTimeout(t); document.removeEventListener("mousedown", onDown); };
+  }, [onClose]);
+
+  return (
+    <div
+      ref={popupRef}
+      className="annotation-popup annotation-popup--v2"
+      style={{ left: px, top: py, width: 280 }}
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="annotation-popup-header">
+        <span className="annotation-popup-label">✎ Point Note</span>
+        <button className="annotation-popup-close" onClick={onClose} aria-label="Close">✕</button>
+      </div>
+
+      <textarea
+        className="annotation-popup-textarea"
+        placeholder="Add a note to this location…"
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        rows={4}
+        autoFocus
+      />
+
+      <div className="annotation-popup-actions">
+        <button
+          className="annotation-btn annotation-btn--delete"
+          onClick={() => { onDelete(annotation.id); onClose(); }}
+        >Delete</button>
+        <button
+          className="annotation-btn annotation-btn--save"
+          onClick={() => { onSave(annotation.id, note); onClose(); }}
+        >Save note</button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // HighlightLayer — states: default | noted | ai-ready | loading | error | flash
 // ─────────────────────────────────────────────────────────────────────────────
-function HighlightLayer({ highlights, onHighlightClick, mode, flashingId, zoom, scrollAreaWidth }) {
+function HighlightLayer({ highlights, onHighlightClick, mode, flashingId, zoom, scrollAreaRef }) {
   if (!highlights.length) return null;
   const interactive = mode === "select";
   const z = zoom || 1;
 
-  // Mirror the exact anchor points used in toScrollAreaCoords at capture time.
-  // cx: page is flex-centered — scale X relative to the container centre, not 0.
-  // py: scroll area has fixed padding:24px — scale Y above that baseline only.
-  const cx = scrollAreaWidth > 0 ? scrollAreaWidth / 2 : 0;
-  const py = 24; // matches `.pdf-scroll-area { padding: 24px }` in index.css
+  const scrollAreaEl = scrollAreaRef?.current;
+  const cx = scrollAreaEl ? getPageCenterX(scrollAreaEl) : 0;
+  const py = 24;
 
   return (
     <div className="pdf-highlight-layer" aria-hidden="true">
@@ -443,11 +511,6 @@ function SelectionTooltip({ position, onExplain, onDismiss, loading }) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PDFViewer — default export
-//
-// New props (Phase 4+):
-//   onExplainRequest(text, highlightId)  — highlightId wires chat linking
-//   focusedHighlightId                   — set by chat click; triggers scroll+flash
-//   onFocusedHighlightConsumed           — called after acting so App can reset
 // ─────────────────────────────────────────────────────────────────────────────
 export default function PDFViewer({
   file,
@@ -468,17 +531,50 @@ export default function PDFViewer({
   const [activeHighlight, setActiveHighlight] = useState(null);
   const [flashingId, setFlashingId]           = useState(null);
 
+  // ── [Phase 5] New state ──────────────────────────────────────────────────
+  const [annotations, setAnnotations]         = useState([]);
+  const [activeAnnotation, setActiveAnnotation] = useState(null);
+  const [currentPage, setCurrentPage]         = useState(1);
+
   const containerRef        = useRef(null);
   const scrollAreaRef       = useRef(null);
-  const pendingExplainIdRef = useRef(null);   // which highlight is waiting for AI
-  const lastRangeRef        = useRef(null);   // browser Range from last mouseUp
-  const explainTimeoutRef   = useRef(null);   // 15 s safety timeout
+  const pendingExplainIdRef = useRef(null);
+  const lastRangeRef        = useRef(null);
+  const explainTimeoutRef   = useRef(null);
   const highlightsRef       = useRef(highlights);
   const activeHighlightRef  = useRef(activeHighlight);
+  const annotationsRef      = useRef(annotations);
 
-  useEffect(() => { highlightsRef.current = highlights; },           [highlights]);
+  // ── [Phase 5] baseWidthRef — must be declared before any early return ────
+  // (moved from below the early return to fix React hooks ordering violation)
+  const baseWidthRef        = useRef(null);
+
+  // ── [Phase 5 / Bug fix] zoomRef — always holds the live zoom value ───────
+  //
+  // WHY THIS FIXES THE HIGHLIGHT BUG:
+  //   handleMouseUp is a useCallback that only re-creates when `mode` changes.
+  //   Its closure captures `zoom` at the time mode was set (e.g. 1.0).
+  //   When zoom later changes to 1.5, `createHighlightFromRange` is called from
+  //   inside the stale handleMouseUp — it still sees zoom=1.0, so toScrollAreaCoords
+  //   normalises with the wrong divisor, placing the highlight rect at the wrong
+  //   position for every non-100% zoom level.
+  //
+  //   Fixing the useCallback deps would recreate the listener on every zoom
+  //   change. Instead, we mirror zoom into a ref and read zoomRef.current
+  //   inside createHighlightFromRange — always fresh, zero closure drift.
+  const zoomRef = useRef(zoom);
+
+  useEffect(() => { highlightsRef.current  = highlights;      }, [highlights]);
   useEffect(() => { activeHighlightRef.current = activeHighlight; }, [activeHighlight]);
+  useEffect(() => { annotationsRef.current = annotations;     }, [annotations]);
+  useEffect(() => { zoomRef.current        = zoom;            }, [zoom]);
   useEffect(() => () => clearTimeout(explainTimeoutRef.current), []);
+
+  // ── Initialise baseWidth once the container is in the DOM ────────────────
+  // (lazy: set on first access, not in useEffect, to keep pageWidth in sync)
+  if (!baseWidthRef.current && containerRef.current) {
+    baseWidthRef.current = Math.min(containerRef.current.clientWidth - 48, 900);
+  }
 
   // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -490,8 +586,7 @@ export default function PDFViewer({
     const rect = h.rects[0];
     const z    = zoom || 1;
     el.scrollTo({
-      top: Math.round(
-          rect.y * z - el.clientHeight / 2 + rect.height * z / 2),
+      top: Math.round(rect.y * z - el.clientHeight / 2 + rect.height * z / 2),
       behavior: "smooth",
     });
   }
@@ -516,6 +611,39 @@ export default function PDFViewer({
     }, 15_000);
   }
 
+  // ── [Phase 5] Page tracking — detect which page is most visible ──────────
+  //
+  // Called from the scroll handler (throttled via rAF) and after zoom/page changes.
+  // Finds the page whose vertical centre is closest to the viewport midpoint.
+  // Uses a ref to avoid queueing duplicate setState calls when page hasn't changed.
+  const currentPageRef = useRef(1);
+
+  function updateCurrentPage() {
+    const el = scrollAreaRef.current;
+    if (!el) return;
+    const pageEls = Array.from(el.querySelectorAll(".pdf-page"));
+    if (!pageEls.length) return;
+
+    const midpoint = el.scrollTop + el.clientHeight / 2;
+    let closestPage = 1, closestDist = Infinity;
+
+    pageEls.forEach((pageEl, i) => {
+      const dist = Math.abs((pageEl.offsetTop + pageEl.offsetHeight / 2) - midpoint);
+      if (dist < closestDist) { closestDist = dist; closestPage = i + 1; }
+    });
+
+    if (currentPageRef.current !== closestPage) {
+      currentPageRef.current = closestPage;
+      setCurrentPage(closestPage);
+    }
+  }
+
+  // Re-detect page after zoom change (page heights change → offsets change)
+  useEffect(() => {
+    const id = setTimeout(updateCurrentPage, 200); // wait for DOM to settle
+    return () => clearTimeout(id);
+  }, [zoom, numPages]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Mode ──────────────────────────────────────────────────────────────────
 
   function handleModeChange(next) {
@@ -523,6 +651,7 @@ export default function PDFViewer({
     setTooltipPos(null);
     setSelectedText("");
     setActiveHighlight(null);
+    setActiveAnnotation(null);
     window.getSelection()?.removeAllRanges();
   }
 
@@ -540,23 +669,16 @@ export default function PDFViewer({
   useEffect(() => {
     function onResize() {
       setActiveHighlight((prev) =>
-        prev
-          ? { ...prev, position: computePopupPosition(prev, scrollAreaRef.current, zoom) }
-          : null
+        prev ? { ...prev, position: computePopupPosition(prev, scrollAreaRef.current, zoom) } : null
       );
     }
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    setActiveHighlight(prev =>
-      prev
-        ? {
-            ...prev,
-            position: computePopupPosition(prev, scrollAreaRef.current, zoom),
-          }
-        : null
+    setActiveHighlight((prev) =>
+      prev ? { ...prev, position: computePopupPosition(prev, scrollAreaRef.current, zoom) } : null
     );
   }, [zoom]);
 
@@ -570,34 +692,44 @@ export default function PDFViewer({
     function onScroll() {
       if (!ticking) {
         requestAnimationFrame(() => {
+          // ── Page tracking ──────────────────────────────────────────────
+          updateCurrentPage();
+
+          // ── Highlight popup reanchoring ────────────────────────────────
           const cur = activeHighlightRef.current;
-          if (!cur) return;
-
-          if (cur.aiLoading) {
-            const fresh = highlightsRef.current.find((h) => h.id === cur.id);
-            if (!fresh) { setActiveHighlight(null); return; }
-
-            setActiveHighlight(prev =>
-              prev ? { ...prev, ...fresh, position: computePopupPosition(fresh, el, zoom) } : null
-            );
-          } else {
-            setActiveHighlight(prev => {
-              if (!prev) return null;
-
-              const fresh = highlightsRef.current.find(h => h.id === prev.id);
-              if (!fresh) return null;
-
-              return {
-                ...prev,
-                ...fresh,
-                position: computePopupPosition(fresh, el, zoom),
-              };
-            });
+          if (cur) {
+            if (cur.aiLoading) {
+              const fresh = highlightsRef.current.find((h) => h.id === cur.id);
+              if (!fresh) { setActiveHighlight(null); }
+              else {
+                setActiveHighlight((prev) =>
+                  prev ? { ...prev, ...fresh, position: computePopupPosition(fresh, el, zoom) } : null
+                );
+              }
+            } else {
+              setActiveHighlight((prev) => {
+                if (!prev) return null;
+                const fresh = highlightsRef.current.find((h) => h.id === prev.id);
+                if (!fresh) return null;
+                return { ...prev, ...fresh, position: computePopupPosition(fresh, el, zoom) };
+              });
+            }
           }
+
+          // ── Annotation popup reanchoring ───────────────────────────────
+          setActiveAnnotation((prev) => {
+            if (!prev) return null;
+            const fresh = annotationsRef.current.find((a) => a.id === prev.id);
+            if (!fresh) return null;
+            return {
+              ...prev,
+              note: fresh.note,
+              position: computeAnnotationPopupPosition(fresh.x, fresh.y, el, zoomRef.current),
+            };
+          });
 
           ticking = false;
         });
-
         ticking = true;
       }
     }
@@ -606,7 +738,7 @@ export default function PDFViewer({
     return () => el.removeEventListener("scroll", onScroll);
   }, [zoom]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Live-sync popup when highlight data changes (aiExplanation, aiLoading, aiError)
+  // Live-sync highlight popup when highlight data changes
   useEffect(() => {
     setActiveHighlight((prev) => {
       if (!prev) return null;
@@ -615,23 +747,7 @@ export default function PDFViewer({
     });
   }, [highlights]);
 
-
-  useEffect(() => {
-    if (!scrollAreaRef.current) return;
-
-    let raf1 = requestAnimationFrame(() => {
-      let raf2 = requestAnimationFrame(() => {
-        setHighlights(prev => [...prev]);
-      });
-    });
-
-    return () => {
-      cancelAnimationFrame(raf1);
-    };
-  }, [zoom]);
-
-
-  // ── CRUD ──────────────────────────────────────────────────────────────────
+  // ── CRUD — Highlights ─────────────────────────────────────────────────────
 
   function handleSaveNote(id, note) {
     setHighlights((prev) => prev.map((h) => (h.id === id ? { ...h, note } : h)));
@@ -645,20 +761,21 @@ export default function PDFViewer({
   function createHighlightFromRange(range, text) {
     if (!scrollAreaRef.current) return null;
 
-    // 1. Convert viewport rects → scroll-area coords, normalised to zoom=1
-    const raw = Array.from(range.getClientRects());
+    // ── HIGHLIGHT BUG FIX ──────────────────────────────────────────────────
+    // Use zoomRef.current (always live) instead of the `zoom` variable from
+    // the closure — which may be stale when called from the memoized handleMouseUp.
+    const currentZoom = zoomRef.current;
 
+    const raw = Array.from(range.getClientRects());
     const normalizedRects = raw
-      .filter(r => r.width > 1 && r.height > 1)
-      .map(r => toScrollAreaCoords(r, scrollAreaRef.current, zoom)); // ✅ FIRST
+      .filter((r) => r.width > 1 && r.height > 1)
+      .map((r) => toScrollAreaCoords(r, scrollAreaRef.current, currentZoom));
 
     if (!normalizedRects.length) return null;
 
-    // 2. Merge adjacent same-line rects → one clean rect per line
     const rects = mergeRects(normalizedRects);
     if (!rects.length) return null;
 
-    // 3. Overlap / duplicate guard — reuse existing highlight, never stack
     const dupe = overlapsExisting(rects, text, highlightsRef.current);
     if (dupe) return dupe.id;
 
@@ -671,7 +788,30 @@ export default function PDFViewer({
     return newId;
   }
 
-  // ── Re-explain ────────────────────────────────────────────────────────────
+  // ── CRUD — Annotations ────────────────────────────────────────────────────
+
+  function handleSaveAnnotationNote(id, note) {
+    setAnnotations((prev) => prev.map((a) => (a.id === id ? { ...a, note } : a)));
+    // Sync to activeAnnotation so the marker dot updates
+    setActiveAnnotation((prev) => (prev?.id === id ? { ...prev, note } : prev));
+  }
+
+  function handleDeleteAnnotation(id) {
+    setAnnotations((prev) => prev.filter((a) => a.id !== id));
+    setActiveAnnotation(null);
+  }
+
+  // ── [Phase 5] Marker click from AnnotationLayer ───────────────────────────
+  function handleMarkerClick(e, annotation) {
+    if (activeAnnotation?.id === annotation.id) { setActiveAnnotation(null); return; }
+    const fresh = annotationsRef.current.find((a) => a.id === annotation.id) ?? annotation;
+    setActiveAnnotation({
+      ...fresh,
+      position: computeAnnotationPopupPosition(fresh.x, fresh.y, scrollAreaRef.current, zoomRef.current),
+    });
+  }
+
+  // ── Re-explain ─────────────────────────────────────────────────────────────
 
   function handleReExplain(highlight) {
     if (explainLoading) return;
@@ -680,10 +820,10 @@ export default function PDFViewer({
       prev.map((h) => h.id === highlight.id ? { ...h, aiLoading: true, aiError: null } : h)
     );
     startExplainTimeout(highlight.id);
-    onExplainRequest(highlight.text, highlight.id); // passes highlightId for chat linking
+    onExplainRequest(highlight.text, highlight.id);
   }
 
-  // ── Consume explainResult ─────────────────────────────────────────────────
+  // ── Consume explainResult ──────────────────────────────────────────────────
 
   useEffect(() => {
     if (!explainResult) return;
@@ -705,14 +845,14 @@ export default function PDFViewer({
 
     if (targetId && !isError) {
       scrollToHighlightSmooth(targetId);
-      setTimeout(() => flashHighlight(targetId), 200); // flash after scroll settles
+      setTimeout(() => flashHighlight(targetId), 200);
     }
 
     pendingExplainIdRef.current = null;
     onExplainResultConsumed?.();
   }, [explainResult]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Bidirectional: focus from chat ───────────────────────────────────────
+  // ── Bidirectional: focus from chat ────────────────────────────────────────
 
   useEffect(() => {
     if (!focusedHighlightId) return;
@@ -723,7 +863,6 @@ export default function PDFViewer({
     scrollToHighlightSmooth(focusedHighlightId);
     flashHighlight(focusedHighlightId);
 
-    // Open popup after scroll animation runs
     setTimeout(() => {
       setActiveHighlight({
         ...h,
@@ -732,7 +871,7 @@ export default function PDFViewer({
     }, 320);
   }, [focusedHighlightId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Mouse / event handlers ────────────────────────────────────────────────
+  // ── Mouse / event handlers ─────────────────────────────────────────────────
 
   const handleMouseUp = useCallback(() => {
     const selection = window.getSelection();
@@ -757,11 +896,47 @@ export default function PDFViewer({
     }, 10);
   }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── [Phase 5] handleClick — annotate mode creates point annotations ───────
   const handleClick = useCallback((e) => {
     if (mode !== "annotate") return;
-    if (e.target.closest(".selection-tooltip")) return;
-    if (e.target.closest(".annotation-popup")) return;
-  }, [mode]);
+    if (e.target.closest(".selection-tooltip"))  return;
+    if (e.target.closest(".annotation-popup"))   return;
+    if (e.target.closest(".pdf-annotation-marker")) return;
+
+    const scrollEl = scrollAreaRef.current;
+    if (!scrollEl) return;
+
+    const area = scrollEl.getBoundingClientRect();
+    const z    = zoomRef.current;
+    const cx   = getPageCenterX(scrollEl);
+    const py   = 24;
+
+    // Raw click position in scroll-area space
+    const rawX = e.clientX - area.left + scrollEl.scrollLeft;
+    const rawY = e.clientY - area.top  + scrollEl.scrollTop;
+
+    // Normalise — same formula as toScrollAreaCoords
+    const storedX = Math.round(cx + (rawX - cx) / z);
+    const storedY = Math.round(py + (rawY - py) / z);
+
+    // Detect which page was clicked
+    const pageEls = Array.from(scrollEl.querySelectorAll(".pdf-page"));
+    let page = 1;
+    for (let i = 0; i < pageEls.length; i++) {
+      const top    = pageEls[i].offsetTop;
+      const bottom = top + pageEls[i].offsetHeight;
+      if (rawY >= top && rawY <= bottom) { page = i + 1; break; }
+    }
+
+    const newAnnotation = { id: uid(), x: storedX, y: storedY, page, note: "" };
+    setAnnotations((prev) => [...prev, newAnnotation]);
+
+    // Immediately open the note popup for the new annotation
+    setActiveAnnotation({
+      ...newAnnotation,
+      position: computeAnnotationPopupPosition(storedX, storedY, scrollEl, z),
+    });
+  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleMouseDown = useCallback((e) => {
     if (!e.target.closest(".selection-tooltip")) { setTooltipPos(null); setSelectedText(""); }
@@ -780,7 +955,7 @@ export default function PDFViewer({
     }
   }, [explainLoading]);
 
-  // ── Explain from tooltip ──────────────────────────────────────────────────
+  // ── Explain from tooltip ───────────────────────────────────────────────────
 
   function handleExplain() {
     if (!selectedText || explainLoading) return;
@@ -823,18 +998,62 @@ export default function PDFViewer({
     window.getSelection()?.removeAllRanges();
   }
 
-  function onDocumentLoadSuccess({ numPages }) { setNumPages(numPages); setLoadError(null); }
-  function onDocumentLoadError(err) { console.error(err); setLoadError("Failed to load PDF."); }
+  // ── [Phase 5] Fit to width ─────────────────────────────────────────────────
+  function handleFitToWidth() {
+    const el   = scrollAreaRef.current;
+    const base = baseWidthRef.current;
+    if (!el || !base) return;
+
+    // Available width minus the 24px padding on each side
+    const available = el.clientWidth - 48;
+    const newZoom   = parseFloat(
+      Math.max(0.5, Math.min(3, available / base)).toFixed(2)
+    );
+    setZoom(newZoom);
+  }
+
+  // ── [Phase 5] Download ─────────────────────────────────────────────────────
+  function handleDownload() {
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    const a   = document.createElement("a");
+    a.href     = url;
+    a.download = file.name ?? "document.pdf";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+
+  // ── [Phase 5] Scroll to page ───────────────────────────────────────────────
+  function handleScrollToPage(pageNum) {
+    const el = scrollAreaRef.current;
+    if (!el) return;
+    const pageEls = el.querySelectorAll(".pdf-page");
+    const target  = pageEls[pageNum - 1];
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  // ── Document load handlers ────────────────────────────────────────────────
+
+  function onDocumentLoadSuccess({ numPages }) {
+    setNumPages(numPages);
+    setLoadError(null);
+    // Detect initial page after first render
+    setTimeout(updateCurrentPage, 300);
+  }
+
+  function onDocumentLoadError(err) {
+    console.error(err);
+    setLoadError("Failed to load PDF.");
+  }
 
   if (!file) return null;
 
-  const baseWidthRef = useRef(null);
-
-  if (!baseWidthRef.current && containerRef.current) {
-    baseWidthRef.current = Math.min(containerRef.current.clientWidth - 48, 900);
-  }
-
   const pageWidth = Math.round((baseWidthRef.current || 800) * zoom);
+
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="pdf-viewer" ref={containerRef}>
@@ -844,8 +1063,11 @@ export default function PDFViewer({
         zoom={zoom}
         onZoomChange={setZoom}
         numPages={numPages}
-        currentPage={1}
+        currentPage={currentPage}
         fileName={file.name}
+        onFitToWidth={handleFitToWidth}
+        onDownload={handleDownload}
+        onScrollToPage={handleScrollToPage}
       />
 
       <div
@@ -866,7 +1088,11 @@ export default function PDFViewer({
             file={file}
             onLoadSuccess={onDocumentLoadSuccess}
             onLoadError={onDocumentLoadError}
-            loading={<div className="pdf-loading"><span className="spinner" /><span>Loading PDF…</span></div>}
+            loading={
+              <div className="pdf-loading">
+                <span className="spinner" /><span>Loading PDF…</span>
+              </div>
+            }
           >
             {Array.from({ length: numPages ?? 0 }, (_, i) => (
               <Page
@@ -887,10 +1113,20 @@ export default function PDFViewer({
           mode={mode}
           flashingId={flashingId}
           zoom={zoom}
-          scrollAreaWidth={scrollAreaRef.current?.clientWidth ?? 0}
+          scrollAreaRef={scrollAreaRef}
+        />
+
+        {/* [Phase 5] Annotation marker layer — rendered above highlights */}
+        <AnnotationLayer
+          annotations={annotations}
+          onMarkerClick={handleMarkerClick}
+          activeAnnotationId={activeAnnotation?.id ?? null}
+          zoom={zoom}
+          scrollAreaRef={scrollAreaRef}
         />
       </div>
 
+      {/* Highlight annotation popup */}
       {activeHighlight && (
         <AnnotationPopup
           highlight={activeHighlight}
@@ -899,6 +1135,16 @@ export default function PDFViewer({
           onClose={() => setActiveHighlight(null)}
           onReExplain={handleReExplain}
           explainLoading={explainLoading}
+        />
+      )}
+
+      {/* [Phase 5] Point annotation note popup */}
+      {activeAnnotation && (
+        <AnnotationNotePopup
+          annotation={activeAnnotation}
+          onSave={handleSaveAnnotationNote}
+          onDelete={handleDeleteAnnotation}
+          onClose={() => setActiveAnnotation(null)}
         />
       )}
 

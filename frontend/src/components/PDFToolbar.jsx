@@ -1,6 +1,5 @@
 // src/components/PDFToolbar.jsx
-// Phase 0: PDF Viewer Toolbar — UI + State Foundation
-// Replaces the old [📄 name] [pages] [hint] header with a structured toolbar.
+// Phase 5: Viewer Controls — fit-to-width, download, page navigation wired up.
 
 // ── Tiny reusable button ──────────────────────────────────────────────────────
 function ToolBtn({ label, icon, active, onClick, title }) {
@@ -24,34 +23,40 @@ function Divider() {
 
 // ── PDFToolbar ────────────────────────────────────────────────────────────────
 export default function PDFToolbar({
-  mode,          // "select" | "highlight" | "annotate"
-  onModeChange,  // (mode: string) => void
-  zoom,          // number, e.g. 1 = 100%
-  onZoomChange,  // (zoom: number) => void  — optional, kept for Phase 1
-  numPages,      // number | null
-  currentPage,   // number — static for now (prop for future scroll-tracking)
-  fileName,      // string
+  mode,           // "select" | "highlight" | "annotate"
+  onModeChange,   // (mode: string) => void
+  zoom,           // number, e.g. 1 = 100%
+  onZoomChange,   // (zoom: number) => void
+  numPages,       // number | null
+  currentPage,    // number — auto-tracked by scroll observer
+  fileName,       // string
+  onFitToWidth,   // () => void   — Phase 5
+  onDownload,     // () => void   — Phase 5
+  onScrollToPage, // (page: number) => void — Phase 5
 }) {
   const zoomPct = Math.round((zoom ?? 1) * 100);
 
-  function handleFit() {
-    console.log("[PDFToolbar] Fit clicked");
-  }
-
-  function handleDownload() {
-    console.log("[PDFToolbar] Download clicked");
-  }
-
   function handleZoomIn() {
-    const next = Math.min(zoom + 0.1, 3);
-    onZoomChange?.(next);
-    console.log("[PDFToolbar] Zoom →", Math.round(next * 100) + "%");
+    const next = Math.min((zoom ?? 1) + 0.1, 3);
+    onZoomChange?.(parseFloat(next.toFixed(2)));
   }
 
   function handleZoomOut() {
-    const next = Math.max(zoom - 0.1, 0.5);
-    onZoomChange?.(next);
-    console.log("[PDFToolbar] Zoom →", Math.round(next * 100) + "%");
+    const next = Math.max((zoom ?? 1) - 0.1, 0.5);
+    onZoomChange?.(parseFloat(next.toFixed(2)));
+  }
+
+  function handleFit() {
+    onFitToWidth?.();
+  }
+
+  function handleDownload() {
+    onDownload?.();
+  }
+
+  // Clicking the page info area scrolls to that page (simple: click → same page, future: input)
+  function handlePageClick() {
+    if (currentPage) onScrollToPage?.(currentPage);
   }
 
   return (
@@ -64,21 +69,21 @@ export default function PDFToolbar({
           icon="✦"
           active={mode === "highlight"}
           onClick={() => onModeChange("highlight")}
-          title="Highlight mode"
+          title="Highlight mode — select text to highlight"
         />
         <ToolBtn
           label="Annotate"
           icon="✎"
           active={mode === "annotate"}
           onClick={() => onModeChange("annotate")}
-          title="Annotate mode"
+          title="Annotate mode — click anywhere to drop a note"
         />
         <ToolBtn
           label="Select"
           icon="⌖"
           active={mode === "select"}
           onClick={() => onModeChange("select")}
-          title="Select mode"
+          title="Select mode — select text to explain with AI"
         />
       </div>
 
@@ -92,30 +97,37 @@ export default function PDFToolbar({
           <button
             className="pdf-zoom-btn"
             onClick={handleZoomOut}
-            title="Zoom out"
+            title="Zoom out (−10%)"
             aria-label="Zoom out"
+            disabled={(zoom ?? 1) <= 0.5}
           >−</button>
           <span className="pdf-zoom-label">{zoomPct}%</span>
           <button
             className="pdf-zoom-btn"
             onClick={handleZoomIn}
-            title="Zoom in"
+            title="Zoom in (+10%)"
             aria-label="Zoom in"
+            disabled={(zoom ?? 1) >= 3}
           >+</button>
         </div>
 
-        <ToolBtn label="Fit"      icon="⛶" onClick={handleFit}      title="Fit to width" />
-        <ToolBtn label="Download" icon="↓" onClick={handleDownload}  title="Download PDF" />
+        <ToolBtn label="Fit"      icon="⛶"  onClick={handleFit}      title="Fit PDF to container width" />
+        <ToolBtn label="Download" icon="↓"   onClick={handleDownload}  title="Download original PDF" />
 
         <Divider />
 
-        {/* Page info */}
-        <span className="pdf-page-info">
+        {/* Page info — clicking scrolls to current page (hook for future page-jump input) */}
+        <button
+          className="pdf-page-info pdf-page-info--btn"
+          onClick={handlePageClick}
+          title="Click to scroll to this page"
+          aria-label={`Page ${currentPage ?? 1} of ${numPages ?? "?"}`}
+        >
           Page{" "}
           <span className="pdf-page-info-current">{currentPage ?? 1}</span>
           {" "}of{" "}
           <span className="pdf-page-info-total">{numPages ?? "—"}</span>
-        </span>
+        </button>
       </div>
 
     </div>

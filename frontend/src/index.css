@@ -1824,3 +1824,136 @@ textarea { font-family: inherit; font-size: inherit; }
   gap: 4px;
   margin-bottom: 6px;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PHASE 5 — Viewer Controls + Navigation
+   Append this block to the bottom of index.css
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Annotation Layer ────────────────────────────────────────────────────── */
+.pdf-annotation-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;   /* layer itself doesn't catch events */
+  z-index: 12;            /* above HighlightLayer (z-index: 10) */
+}
+
+/* ── Annotation Marker (pin) ─────────────────────────────────────────────── */
+.pdf-annotation-marker {
+  position: absolute;
+  pointer-events: auto;
+  transform: translate(-50%, -100%); /* pin tip sits exactly at the clicked point */
+  width: 28px;
+  height: 28px;
+  border-radius: 50% 50% 50% 0;     /* teardrop */
+  background: var(--accent);
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 13;
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.40),
+    0 0 0 1.5px rgba(232, 160, 74, 0.55);
+  transition:
+    transform     160ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    box-shadow    160ms ease,
+    background    160ms ease;
+  transform-origin: center bottom;
+  will-change: transform;
+}
+
+/* Entrance animation */
+@keyframes marker-drop-in {
+  0%   { opacity: 0; transform: translate(-50%, -140%) scale(0.5); }
+  60%  { transform: translate(-50%, -90%)  scale(1.12); }
+  100% { opacity: 1; transform: translate(-50%, -100%) scale(1); }
+}
+.pdf-annotation-marker {
+  animation: marker-drop-in 280ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+.pdf-annotation-marker:hover {
+  transform: translate(-50%, -108%) scale(1.1);
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.50),
+    0 0 0 2px rgba(232, 160, 74, 0.80);
+}
+
+.pdf-annotation-marker--active {
+  background: #f0b45a;
+  transform: translate(-50%, -108%) scale(1.15);
+  box-shadow:
+    0 6px 20px rgba(0, 0, 0, 0.55),
+    0 0 0 2.5px rgba(240, 180, 90, 0.90);
+}
+
+/* Pin icon inside marker */
+.pdf-annotation-marker-pin {
+  font-size: 13px;
+  color: #0e0e0f;          /* dark on amber background */
+  line-height: 1;
+  user-select: none;
+  position: relative;
+  top: -1px;
+}
+
+/* Small dot indicator when a note exists */
+.pdf-annotation-marker-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #0e0e0f;
+  border: 1.5px solid var(--accent);
+}
+
+/* "Noted" state — darker amber */
+.pdf-annotation-marker--noted {
+  background: #c9832a;
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.40),
+    0 0 0 1.5px rgba(201, 131, 42, 0.70);
+}
+
+/* ── Page info as a button (Phase 5: clickable) ──────────────────────────── */
+.pdf-page-info--btn {
+  background: none;
+  border: none;
+  padding: 3px 8px;
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.pdf-page-info--btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* ── Zoom button disabled state ──────────────────────────────────────────── */
+.pdf-zoom-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* ── Annotate mode cursor hint on scroll area ────────────────────────────── */
+.pdf-scroll-area[style*="crosshair"] .pdf-page {
+  /* Subtle ring to signal annotate mode is active */
+  transition: box-shadow 200ms ease;
+}
+
+/* ── Smooth zoom transition on page container ────────────────────────────── */
+.pdf-page {
+  transition: width 180ms cubic-bezier(0.25, 1, 0.5, 1);
+}
