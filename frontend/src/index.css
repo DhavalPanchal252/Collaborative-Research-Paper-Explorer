@@ -554,7 +554,14 @@ textarea { font-family: inherit; font-size: inherit; }
   border-radius: 4px;
   letter-spacing: 0.02em;
 }
+.pdf-highlight-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
 
+  transform: translateZ(0);
+  will-change: transform;
+}
 /* Scrollable PDF area */
 .pdf-scroll-area {
   flex: 1;
@@ -564,12 +571,16 @@ textarea { font-family: inherit; font-size: inherit; }
   flex-direction: column;
   align-items: center;
   gap: 16px;
+  will-change: transform;
+  transform: translateZ(0);
 
   /* Custom scrollbar */
   scrollbar-width: thin;
   scrollbar-color: #2a2a2a transparent;
 }
-
+.pdf-page canvas {
+  transform: translateZ(0);
+}
 .pdf-scroll-area::-webkit-scrollbar {
   width: 6px;
 }
@@ -1209,35 +1220,61 @@ textarea { font-family: inherit; font-size: inherit; }
 
 .pdf-highlight {
   position: absolute;
-  background: rgba(255, 220, 80, 0.38);
-  border-radius: 2px;
-  pointer-events: none;       /* overridden inline for first rect in select mode */
-  box-shadow: 0 0 0 1px rgba(255, 200, 50, 0.25);
-  animation: highlight-in 120ms ease-out both;
-  transition: background 150ms ease, box-shadow 150ms ease;
+
+  /*
+   * mix-blend-mode: multiply — blends the yellow with the ink beneath so
+   * text characters show through naturally, like a real marker pen.
+   * Without this the highlight sits as an opaque block and washes out text.
+   */
+  mix-blend-mode: multiply;
+  background: rgba(255, 213, 50, 0.52);
+
+  /*
+   * border-radius 3px — each merged rect spans a full line, so rounded
+   * corners produce the smooth pill shape of Notion/Acrobat. Was 2px,
+   * which still looked sharp at high-DPI.
+   */
+  border-radius: 3px;
+
+  pointer-events: none;   /* overridden inline per highlight in select mode */
+
+  /*
+   * No box-shadow on the base rule — the previous 1px ring created a
+   * visible seam wherever two rects touched. State variants (noted, hover)
+   * add their own ring only when semantically meaningful.
+   */
+
+  /*
+   * translateZ(0) + will-change — promotes each rect to its own GPU
+   * compositor layer. Prevents the scroll container triggering a full
+   * repaint when highlights appear or the user scrolls. Eliminates the
+   * "blurry flash on scroll" artifact seen on composited containers.
+   */
+  transform: translateZ(0);
+  will-change: opacity;
+
+  animation: highlight-in 100ms ease-out both;
+  transition: background 120ms ease;
 }
 
 @keyframes highlight-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
+  from { opacity: 0; transform: translateZ(0) scaleX(0.96); }
+  to   { opacity: 1; transform: translateZ(0) scaleX(1);    }
 }
 
-/* ── Phase 3: annotated highlight variant ── */
+/* ── Annotated highlight ── */
 .pdf-highlight--noted {
-  background: rgba(255, 190, 50, 0.50);
-  box-shadow:
-    0 0 0 1px rgba(255, 170, 30, 0.55),
-    0 0 6px rgba(255, 170, 30, 0.15);
+  background: rgba(255, 185, 30, 0.58);
+  box-shadow: 0 0 0 1px rgba(255, 165, 20, 0.42);
 }
 
-/* Hover state — only visible when pointer-events:auto (first rect, select mode) */
+/* Hover — pointer-events:auto set inline on first rect in select mode only */
 .pdf-highlight:hover {
-  background: rgba(255, 220, 80, 0.60);
-  box-shadow: 0 0 0 1.5px rgba(255, 200, 50, 0.55);
+  background: rgba(255, 213, 50, 0.78);
 }
 
 .pdf-highlight--noted:hover {
-  background: rgba(255, 190, 50, 0.70);
+  background: rgba(255, 185, 30, 0.80);
 }
 
 /* ── Annotation popup ──────────────────────────────────────────────────────── */
