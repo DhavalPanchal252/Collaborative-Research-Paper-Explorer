@@ -1957,3 +1957,187 @@ textarea { font-family: inherit; font-size: inherit; }
 .pdf-page {
   transition: width 180ms cubic-bezier(0.25, 1, 0.5, 1);
 }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   PRODUCTION PDF PAGE LAYOUT
+   Append this block at the very bottom of index.css.
+   All rules override the earlier PDF viewer declarations via specificity
+   or by targeting the same selectors with later cascade position.
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Viewer shell — deep neutral canvas ────────────────────────────────────── */
+.pdf-viewer {
+  background: #18181b;     /* warm-near-black — distinct from page white */
+}
+
+/* ── Scroll area — the "light table" the pages sit on ──────────────────────── */
+.pdf-scroll-area {
+  background: #18181b;
+
+  /* Generous padding so pages never touch the chrome */
+  padding: 40px 32px 60px;
+
+  /* Zero flex gap — spacing is owned entirely by page margins below,
+     which gives predictable geometry for the annotation coordinate system. */
+  gap: 0;
+
+  /* Smooth inertial scrolling on iOS / trackpad */
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+
+  /* Refined scrollbar — thin and recessive */
+  scrollbar-width: thin;
+  scrollbar-color: #2e2e33 transparent;
+}
+
+.pdf-scroll-area::-webkit-scrollbar       { width: 7px; }
+.pdf-scroll-area::-webkit-scrollbar-track { background: transparent; }
+.pdf-scroll-area::-webkit-scrollbar-thumb {
+  background: #2e2e33;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background-clip: content-box;
+}
+.pdf-scroll-area::-webkit-scrollbar-thumb:hover { background: #42424a; border-color: transparent; background-clip: content-box; }
+
+/* ── Individual page card ────────────────────────────────────────────────────
+   Each page is an independent visual unit — a sheet of white paper
+   floating over the dark canvas with natural depth.
+   ────────────────────────────────────────────────────────────────────────── */
+.pdf-page {
+  /* Explicit white paper background so the canvas never bleeds */
+  background: #ffffff;
+
+  /* Crisp, barely-visible physical edge — like real paper under bright light */
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  outline: 1px solid rgba(0, 0, 0, 0.55);   /* outer edge that merges with bg */
+  outline-offset: 0px;
+
+  /* Three-layer shadow system:
+       Layer 1 — contact shadow: tight, dark, close to the page base
+       Layer 2 — mid shadow:     moderate spread, main depth impression
+       Layer 3 — ambient shadow: wide diffuse halo, matches Acrobat/Notion */
+  box-shadow:
+    0 1px 2px  rgba(0, 0, 0, 0.50),
+    0 5px 18px rgba(0, 0, 0, 0.48),
+    0 18px 55px rgba(0, 0, 0, 0.32),
+    0 0 0 0.5px rgba(0, 0, 0, 0.70);
+
+  /* Corner rounding — just enough to lift it off the grid feel */
+  border-radius: 3px;
+
+  /* Vertical breathing room between pages — generous like Acrobat Reader */
+  margin-bottom: 36px;
+
+  /* Clip canvas/text-layer overflow at the border-radius */
+  overflow: hidden;
+
+  /* GPU-composite the page so zoom/scroll never causes a layout repaint */
+  transform: translateZ(0);
+  will-change: transform;
+
+  /* Smooth width change during zoom */
+  transition:
+    width      200ms cubic-bezier(0.25, 1, 0.5, 1),
+    box-shadow 200ms ease;
+}
+
+/* Very last page — no trailing gap so scroll end feels intentional */
+.pdf-page:last-child {
+  margin-bottom: 0;
+}
+
+/* Subtle lift on hover — reinforces the "floating card" metaphor */
+.pdf-page:hover {
+  box-shadow:
+    0 2px 4px  rgba(0, 0, 0, 0.48),
+    0 8px 26px rgba(0, 0, 0, 0.52),
+    0 22px 65px rgba(0, 0, 0, 0.36),
+    0 0 0 0.5px rgba(0, 0, 0, 0.70);
+  transition:
+    width      200ms cubic-bezier(0.25, 1, 0.5, 1),
+    box-shadow 140ms ease;
+}
+
+/* Canvas inside page — block removes the 4 px inline gap under the element */
+.pdf-page canvas {
+  display: block;
+  transform: translateZ(0);    /* keep on its own compositor layer */
+  border-radius: inherit;      /* canvas corners match the card */
+}
+
+/* react-pdf text layer — inherit border-radius so it doesn't escape the card */
+.pdf-page .react-pdf__Page__textContent {
+  border-radius: inherit;
+}
+
+/* ── Page number badge ───────────────────────────────────────────────────────
+   A minimal ghost label that appears below each page on hover.
+   Helps orientation in long documents, disappears when not needed.
+   ────────────────────────────────────────────────────────────────────────── */
+.pdf-page-wrapper {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* ── Loading skeleton — keep the same dark theme ────────────────────────────── */
+.pdf-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 80px 40px;
+  color: #3a3a3f;
+  font-size: 13px;
+}
+
+/* ── Error card ─────────────────────────────────────────────────────────────── */
+.pdf-load-error {
+  margin: 60px auto;
+  padding: 18px 26px;
+  background: rgba(224, 80, 80, 0.07);
+  border: 1px solid rgba(224, 80, 80, 0.22);
+  border-radius: 10px;
+  color: #e07070;
+  font-size: 13px;
+  text-align: center;
+  max-width: 380px;
+  line-height: 1.6;
+}
+
+/* ── Highlight layer — stays perfectly flush with scroll area ───────────────── */
+.pdf-highlight-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+  transform: translateZ(0);
+  will-change: transform;
+}
+
+/* ── Annotation layer — same stacking context ───────────────────────────────── */
+.pdf-annotation-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 12;
+}
+
+/* ── Annotate-mode cursor ring on the scroll area ───────────────────────────── */
+.pdf-scroll-area--annotate {
+  cursor: crosshair;
+}
+
+/* ── Toolbar — tighten to match the refined dark theme ──────────────────────── */
+.pdf-toolbar--v2 {
+  background: #111113;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  /* add a faint top shadow so it reads as elevated above the scroll area */
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+/* ── Smooth zoom transition (already set above, consolidated here) ───────────── */
+/* (no duplicate needed — covered by .pdf-page transition above) */
