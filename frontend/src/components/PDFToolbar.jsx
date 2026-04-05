@@ -85,6 +85,13 @@ export default function PDFToolbar({
           onClick={() => onModeChange("select")}
           title="Select mode — select text to explain with AI"
         />
+        <ToolBtn
+          label="Erase"
+          icon="⌫"
+          active={mode === "clear"}
+          onClick={() => onModeChange("clear")}
+          title="Erase mode — click or drag to remove highlights"
+        />
       </div>
 
       <Divider />

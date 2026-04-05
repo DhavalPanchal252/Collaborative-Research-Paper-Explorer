@@ -2141,3 +2141,62 @@ textarea { font-family: inherit; font-size: inherit; }
 
 /* ── Smooth zoom transition (already set above, consolidated here) ───────────── */
 /* (no duplicate needed — covered by .pdf-page transition above) */
+/* ─────────────────────────────────────────────────────────────────────────────
+   PHASE 6: ERASE / CLEAR MODE — append to bottom of index.css
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* ── Erase-target state (hover OR inside drag selection) ─────────────────── */
+.pdf-highlight--erase-target {
+  background: rgba(255, 75, 75, 0.50) !important;
+  box-shadow: 0 0 0 1.5px rgba(255, 75, 75, 0.70) !important;
+  /* Slight scale gives tactile "reachable" feel without layout shift */
+  transform: translateZ(0) scaleY(1.08);
+  transition: background 80ms ease, box-shadow 80ms ease, transform 80ms ease;
+}
+
+/* ── Drag-to-erase selection rectangle ───────────────────────────────────── */
+.erase-selection-box {
+  position: absolute;
+  border: 1.5px dashed rgba(255, 80, 80, 0.85);
+  background: rgba(255, 80, 80, 0.10);
+  border-radius: 3px;
+  pointer-events: none;
+  z-index: 20;
+  /* Prevent the box itself from inheriting mix-blend-mode from the layer */
+  mix-blend-mode: normal;
+}
+
+/* ── Undo button — floats bottom-left of the PDF viewer ─────────────────── */
+.erase-undo-btn {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border-2);
+  border-radius: 20px;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  transition: color var(--transition), background var(--transition), border-color var(--transition);
+}
+.erase-undo-btn:hover {
+  color: var(--accent);
+  border-color: rgba(232, 160, 74, 0.4);
+  background: var(--surface-2);
+}
+
+/* ── Erase mode: active tool button danger tint ──────────────────────────── */
+.pdf-tool-btn--active[title*="Erase"] {
+  color: rgba(255, 100, 100, 0.9);
+  background: rgba(255, 80, 80, 0.10);
+  border-color: rgba(255, 80, 80, 0.30);
+}

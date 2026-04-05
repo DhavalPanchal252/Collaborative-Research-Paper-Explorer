@@ -244,7 +244,23 @@ function isHighlightVisible(highlight, scrollAreaEl, zoom = 1, margin = 80) {
   return relTop >= margin && relTop + rect.height * z <= areaH - margin;
 }
 
-const MODE_CURSOR = { select: "text", highlight: "text", annotate: "crosshair" };
+const MODE_CURSOR = { select: "text", highlight: "text", annotate: "crosshair", clear: "cell" };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// rectIntersects — true when two axis-aligned rects have meaningful overlap.
+// Used by drag-to-erase to detect which highlights fall inside the erase box.
+//
+// a, b: { x, y, width, height }  (scroll-area coords at zoom=1 for stored rects;
+//                                  raw pixel coords for the live drag-box)
+// ─────────────────────────────────────────────────────────────────────────────
+function rectIntersects(a, b) {
+  return (
+    a.x < b.x + b.width  &&
+    a.x + a.width  > b.x &&
+    a.y < b.y + b.height &&
+    a.y + a.height > b.y
+  );
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AnnotationPopup
@@ -432,11 +448,23 @@ function AnnotationNotePopup({ annotation, onSave, onDelete, onClose }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HighlightLayer — states: default | noted | ai-ready | loading | error | flash
+// HighlightLayer — default | noted | ai-ready | loading | error | flash | clear
 // ─────────────────────────────────────────────────────────────────────────────
-function HighlightLayer({ highlights, onHighlightClick, mode, flashingId, zoom, scrollAreaRef }) {
+function HighlightLayer({
+  highlights,
+  onHighlightClick,
+  mode,
+  flashingId,
+  zoom,
+  scrollAreaRef,
+  // Erase mode props:
+  erasingIds,        // Set<id> — highlights targeted by current drag
+  onEraseHover,      // (id) => void — mouse enter in clear mode
+  onEraseLeave,      // (id) => void — mouse leave in clear mode
+}) {
   if (!highlights.length) return null;
   const interactive = mode === "select";
+  const isClearMode = mode === "clear";
   const z = zoom || 1;
 
   const scrollAreaEl = scrollAreaRef?.current;
@@ -447,6 +475,8 @@ function HighlightLayer({ highlights, onHighlightClick, mode, flashingId, zoom, 
     <div className="pdf-highlight-layer" aria-hidden="true">
       {highlights.map((h) =>
         h.rects.map((rect, ri) => {
+          const isDragTarget = isClearMode && erasingIds?.has(h.id);
+
           const cls = [
             "pdf-highlight",
             h.note          ? "pdf-highlight--noted"   : "",
@@ -454,9 +484,14 @@ function HighlightLayer({ highlights, onHighlightClick, mode, flashingId, zoom, 
             h.aiLoading     ? "pdf-highlight--loading" : "",
             h.aiError       ? "pdf-highlight--error"   : "",
             flashingId === h.id ? "pdf-highlight--flash" : "",
+            // Clear mode state classes
+            isDragTarget    ? "pdf-highlight--erase-target" : "",
           ].filter(Boolean).join(" ");
 
-          const isTarget = interactive && ri === 0;
+          // In clear mode every rect is interactive (hover feedback on all rects,
+          // but click-to-delete is on first rect only to avoid double-firing)
+          const isClickTarget  = (interactive && ri === 0) || (isClearMode && ri === 0);
+          const isHoverTarget  = isClearMode;
 
           return (
             <div
@@ -468,17 +503,36 @@ function HighlightLayer({ highlights, onHighlightClick, mode, flashingId, zoom, 
                 top:    Math.round(py + (rect.y - py) * z),
                 width:  Math.round(rect.width  * z),
                 height: Math.round(rect.height * z),
-                pointerEvents: isTarget ? "auto" : "none",
-                cursor:        isTarget ? "pointer" : "default",
+                pointerEvents: (isClickTarget || isHoverTarget) ? "auto" : "none",
+                cursor: isClearMode ? "pointer" : (isClickTarget ? "pointer" : "default"),
               }}
-              onClick={isTarget
+              onClick={isClickTarget
                 ? (e) => { e.stopPropagation(); onHighlightClick(e, h); }
                 : undefined}
+              onMouseEnter={isHoverTarget ? () => onEraseHover?.(h.id) : undefined}
+              onMouseLeave={isHoverTarget ? () => onEraseLeave?.(h.id) : undefined}
             />
           );
         })
       )}
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EraseSelectionBox — the red drag-selection rectangle shown in clear mode.
+// Positioned in scroll-area space so it tracks perfectly alongside highlights.
+// ─────────────────────────────────────────────────────────────────────────────
+function EraseSelectionBox({ box }) {
+  if (!box) return null;
+  const { x, y, width, height } = box;
+  if (width < 2 && height < 2) return null; // don't flash on plain click
+
+  return (
+    <div
+      className="erase-selection-box"
+      style={{ left: x, top: y, width, height }}
+    />
   );
 }
 
@@ -536,6 +590,14 @@ export default function PDFViewer({
   const [activeAnnotation, setActiveAnnotation] = useState(null);
   const [currentPage, setCurrentPage]         = useState(1);
 
+  // ── [Phase 6] Erase mode state ───────────────────────────────────────────
+  const [undoStack, setUndoStack]             = useState([]);   // [{highlights removed}]
+  const [erasingIds, setErasingIds]           = useState(null); // Set<id> during drag
+  const [eraseBox, setEraseBox]               = useState(null); // {x,y,width,height} scroll-space
+  // Erase drag state lives entirely in refs — zero setState during mousemove
+  const eraseStartRef  = useRef(null);   // {x, y} in scroll-area space at dragstart
+  const isDraggingRef  = useRef(false);  // true from mousedown until mouseup
+
   const containerRef        = useRef(null);
   const scrollAreaRef       = useRef(null);
   const pendingExplainIdRef = useRef(null);
@@ -544,6 +606,8 @@ export default function PDFViewer({
   const highlightsRef       = useRef(highlights);
   const activeHighlightRef  = useRef(activeHighlight);
   const annotationsRef      = useRef(annotations);
+  const modeRef             = useRef(mode);      // always-live mode for drag handler
+  const erasingIdsRef       = useRef(erasingIds); // always-live for drag cleanup
 
   // ── [Phase 5] baseWidthRef — must be declared before any early return ────
   // (moved from below the early return to fix React hooks ordering violation)
@@ -568,6 +632,8 @@ export default function PDFViewer({
   useEffect(() => { activeHighlightRef.current = activeHighlight; }, [activeHighlight]);
   useEffect(() => { annotationsRef.current = annotations;     }, [annotations]);
   useEffect(() => { zoomRef.current        = zoom;            }, [zoom]);
+  useEffect(() => { modeRef.current        = mode;            }, [mode]);
+  useEffect(() => { erasingIdsRef.current  = erasingIds;      }, [erasingIds]);
   useEffect(() => () => clearTimeout(explainTimeoutRef.current), []);
 
   // ── Initialise baseWidth once the container is in the DOM ────────────────
@@ -652,16 +718,43 @@ export default function PDFViewer({
     setSelectedText("");
     setActiveHighlight(null);
     setActiveAnnotation(null);
+    // Clear any in-progress erase drag
+    setErasingIds(null);
+    setEraseBox(null);
+    isDraggingRef.current  = false;
+    eraseStartRef.current  = null;
     window.getSelection()?.removeAllRanges();
   }
 
   // ── Highlight click → anchor popup ───────────────────────────────────────
 
   function handleHighlightClick(e, highlight) {
+    // ── Clear mode: click = single-highlight delete (with undo) ────────────
+    if (mode === "clear") {
+      e.stopPropagation();
+      setUndoStack((prev) => [...prev, [highlight]]);
+      setHighlights((prev) => prev.filter((h) => h.id !== highlight.id));
+      return;
+    }
     if (activeHighlight?.id === highlight.id) { setActiveHighlight(null); return; }
     setActiveHighlight({
       ...highlight,
       position: computePopupPosition(highlight, scrollAreaRef.current, zoom),
+    });
+  }
+
+  // Erase mode: hover visual feedback (single highlight)
+  function handleEraseHover(id) {
+    if (isDraggingRef.current) return; // drag handles its own targeting
+    setErasingIds(new Set([id]));
+  }
+  function handleEraseLeave(id) {
+    if (isDraggingRef.current) return;
+    setErasingIds((prev) => {
+      if (!prev || !prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next.size ? next : null;
     });
   }
 
@@ -757,6 +850,25 @@ export default function PDFViewer({
     setHighlights((prev) => prev.filter((h) => h.id !== id));
     setActiveHighlight(null);
   }
+
+  // ── [Phase 6] Undo — restore last batch of erased highlights ────────────
+  function handleUndo() {
+    if (!undoStack.length) return;
+    const last = undoStack[undoStack.length - 1];
+    setHighlights((prev) => [...prev, ...last]);
+    setUndoStack((prev) => prev.slice(0, -1));
+  }
+
+  useEffect(() => {
+    function onKeyDown(e) {
+      if ((e.ctrlKey || e.metaKey) && e.key === "z" && mode === "clear") {
+        e.preventDefault();
+        handleUndo();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [mode, undoStack]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function createHighlightFromRange(range, text) {
     if (!scrollAreaRef.current) return null;
@@ -881,7 +993,7 @@ export default function PDFViewer({
     const text  = selection.toString().trim();
 
     setTimeout(() => {
-      if (mode === "annotate") return;
+      if (mode === "annotate" || mode === "clear") return; // clear mode owns its own mouse logic
       if (!text || text.length < 5) { setTooltipPos(null); setSelectedText(""); return; }
       if (!containerRef.current?.contains(range.commonAncestorContainer)) return;
 
@@ -898,7 +1010,7 @@ export default function PDFViewer({
 
   // ── [Phase 5] handleClick — annotate mode creates point annotations ───────
   const handleClick = useCallback((e) => {
-    if (mode !== "annotate") return;
+    if (mode !== "annotate") return; // clear mode uses mousedown/up, not click
     if (e.target.closest(".selection-tooltip"))  return;
     if (e.target.closest(".annotation-popup"))   return;
     if (e.target.closest(".pdf-annotation-marker")) return;
@@ -940,7 +1052,84 @@ export default function PDFViewer({
 
   const handleMouseDown = useCallback((e) => {
     if (!e.target.closest(".selection-tooltip")) { setTooltipPos(null); setSelectedText(""); }
-  }, []);
+
+    // ── Drag-to-erase: start drag in clear mode ────────────────────────────
+    // We attach to the document handler rather than a React handler so we can
+    // reliably attach move/up listeners and read refs without stale closures.
+    if (modeRef.current !== "clear") return;
+    if (e.target.closest(".annotation-popup") || e.target.closest(".selection-tooltip")) return;
+
+    const scrollEl = scrollAreaRef.current;
+    if (!scrollEl || !scrollEl.contains(e.target)) return;
+
+    const area = scrollEl.getBoundingClientRect();
+    const startX = e.clientX - area.left + scrollEl.scrollLeft;
+    const startY = e.clientY - area.top  + scrollEl.scrollTop;
+
+    eraseStartRef.current = { x: startX, y: startY };
+    isDraggingRef.current = true;
+
+    function onMove(me) {
+      if (!isDraggingRef.current || !eraseStartRef.current) return;
+      const el2   = scrollAreaRef.current;
+      if (!el2) return;
+      const ar2   = el2.getBoundingClientRect();
+      const curX  = me.clientX - ar2.left + el2.scrollLeft;
+      const curY  = me.clientY - ar2.top  + el2.scrollTop;
+      const { x: sx, y: sy } = eraseStartRef.current;
+
+      const box = {
+        x:      Math.min(sx, curX),
+        y:      Math.min(sy, curY),
+        width:  Math.abs(curX - sx),
+        height: Math.abs(curY - sy),
+      };
+      setEraseBox(box);
+
+      // Live intersection — compare box (scroll-area px) vs stored rects (zoom=1)
+      // Convert box to zoom=1 space using the same anchor formula as rendering.
+      const z  = zoomRef.current || 1;
+      const cx = getPageCenterX(el2);
+      const py = 24;
+
+      const boxNorm = {
+        x:      cx + (box.x      - cx) / z,
+        y:      py + (box.y      - py) / z,
+        width:  box.width  / z,
+        height: box.height / z,
+      };
+
+      const targeted = new Set();
+      for (const h of highlightsRef.current) {
+        for (const r of h.rects) {
+          if (rectIntersects(boxNorm, r)) { targeted.add(h.id); break; }
+        }
+      }
+      setErasingIds(targeted.size ? targeted : null);
+    }
+
+    function onUp() {
+      isDraggingRef.current = false;
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup",   onUp);
+
+      const targeted = erasingIdsRef.current;
+      if (targeted && targeted.size > 0) {
+        const removed = highlightsRef.current.filter((h) => targeted.has(h.id));
+        if (removed.length) {
+          setUndoStack((prev) => [...prev, removed]);
+          setHighlights((prev) => prev.filter((h) => !targeted.has(h.id)));
+        }
+      }
+
+      setErasingIds(null);
+      setEraseBox(null);
+      eraseStartRef.current = null;
+    }
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup",   onUp);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     document.addEventListener("mousedown", handleMouseDown);
@@ -1114,7 +1303,13 @@ export default function PDFViewer({
           flashingId={flashingId}
           zoom={zoom}
           scrollAreaRef={scrollAreaRef}
+          erasingIds={erasingIds}
+          onEraseHover={handleEraseHover}
+          onEraseLeave={handleEraseLeave}
         />
+
+        {/* [Phase 6] Drag-to-erase selection rectangle */}
+        <EraseSelectionBox box={eraseBox} />
 
         {/* [Phase 5] Annotation marker layer — rendered above highlights */}
         <AnnotationLayer
@@ -1146,6 +1341,17 @@ export default function PDFViewer({
           onDelete={handleDeleteAnnotation}
           onClose={() => setActiveAnnotation(null)}
         />
+      )}
+
+      {/* [Phase 6] Undo button — visible only in clear mode when stack is non-empty */}
+      {mode === "clear" && undoStack.length > 0 && (
+        <button
+          className="erase-undo-btn"
+          onClick={handleUndo}
+          title="Undo last erase (Ctrl+Z)"
+        >
+          ↩ Undo
+        </button>
       )}
 
       {mode === "select" && (
