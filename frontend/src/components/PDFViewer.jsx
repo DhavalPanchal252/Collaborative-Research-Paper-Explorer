@@ -8,6 +8,7 @@ import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 import PDFToolbar from "./PDFToolbar";
 import AnnotationLayer from "./AnnotationLayer";
+import { downloadAnnotatedPDF } from "../utils/downloadAnnotatedPDF";
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.min.mjs",
@@ -602,6 +603,7 @@ export default function PDFViewer({
   const [highlights, setHighlights]           = useState([]);
   const [activeHighlight, setActiveHighlight] = useState(null);
   const [flashingId, setFlashingId]           = useState(null);
+  const [downloadPhase, setDownloadPhase]     = useState(null); // null | "loading" | "drawing" | "saving"
 
   // ── [Phase 5] New state ──────────────────────────────────────────────────
   const [annotations, setAnnotations]         = useState([]);
@@ -1232,17 +1234,37 @@ export default function PDFViewer({
     setZoom(newZoom);
   }
 
-  // ── [Phase 5] Download ─────────────────────────────────────────────────────
-  function handleDownload() {
-    if (!file) return;
-    const url = URL.createObjectURL(file);
-    const a   = document.createElement("a");
-    a.href     = url;
-    a.download = file.name ?? "document.pdf";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  // ── [Phase 6] Download — annotated PDF via pdf-lib ───────────────────────
+  async function handleDownload() {
+    if (!file || downloadPhase) return; // prevent double-click mid-export
+
+    const base = baseWidthRef.current;
+    const el   = scrollAreaRef.current;
+    if (!base || !el) return;
+
+    // Compute cx once from the live DOM — same value used by toScrollAreaCoords
+    const pageCX = (() => {
+      const pageEl = el.querySelector(".pdf-page");
+      if (!pageEl) return el.clientWidth / 2;
+      const areaRect = el.getBoundingClientRect();
+      const pageRect = pageEl.getBoundingClientRect();
+      return pageRect.left - areaRect.left + el.scrollLeft + pageRect.width / 2;
+    })();
+
+    try {
+      await downloadAnnotatedPDF(
+        file,
+        highlights,
+        base,
+        pageCX,
+        (phase) => setDownloadPhase(phase),
+      );
+    } catch (err) {
+      console.error("[downloadAnnotatedPDF] failed:", err);
+      alert("Export failed: " + err.message);
+    } finally {
+      setDownloadPhase(null);
+    }
   }
 
   // ── [Phase 5] Scroll to page ───────────────────────────────────────────────
@@ -1288,6 +1310,7 @@ export default function PDFViewer({
         onFitToWidth={handleFitToWidth}
         onDownload={handleDownload}
         onScrollToPage={handleScrollToPage}
+        downloadPhase={downloadPhase}
       />
 
       <div

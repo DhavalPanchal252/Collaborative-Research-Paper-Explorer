@@ -33,8 +33,14 @@ export default function PDFToolbar({
   onFitToWidth,   // () => void   — Phase 5
   onDownload,     // () => void   — Phase 5
   onScrollToPage, // (page: number) => void — Phase 5
+  downloadPhase,  // null | "loading" | "drawing" | "saving" — Phase 6
 }) {
   const zoomPct = Math.round((zoom ?? 1) * 100);
+
+  const downloadLabel = downloadPhase === "loading" ? "Loading…"
+                      : downloadPhase === "drawing" ? "Drawing…"
+                      : downloadPhase === "saving"  ? "Saving…"
+                      : "Download";
 
   function handleZoomIn() {
     const next = Math.min((zoom ?? 1) + 0.1, 3);
@@ -118,8 +124,14 @@ export default function PDFToolbar({
           >+</button>
         </div>
 
-        <ToolBtn label="Fit"      icon="⛶"  onClick={handleFit}      title="Fit PDF to container width" />
-        <ToolBtn label="Download" icon="↓"   onClick={handleDownload}  title="Download original PDF" />
+        <ToolBtn label="Fit" icon="⛶" onClick={handleFit} title="Fit PDF to container width" />
+        <ToolBtn
+          label={downloadLabel}
+          icon={downloadPhase ? undefined : "↓"}
+          onClick={handleDownload}
+          title={downloadPhase ? "Exporting annotated PDF…" : "Download annotated PDF"}
+          active={!!downloadPhase}
+        />
 
         <Divider />
 
