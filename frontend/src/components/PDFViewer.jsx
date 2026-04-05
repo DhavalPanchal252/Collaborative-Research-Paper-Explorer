@@ -1066,8 +1066,18 @@ export default function PDFViewer({
     const startX = e.clientX - area.left + scrollEl.scrollLeft;
     const startY = e.clientY - area.top  + scrollEl.scrollTop;
 
+    // Prevent the browser from starting a native text selection on this mousedown.
+    // Without this, dragging across text nodes produces a text selection in
+    // parallel with the erase-box drag — the two fight each other visually.
+    e.preventDefault();
+
     eraseStartRef.current = { x: startX, y: startY };
     isDraggingRef.current = true;
+
+    // Belt-and-suspenders: lock userSelect on <body> for the entire drag so
+    // any text node that gets mouseentered during the move can't be selected.
+    document.body.style.userSelect       = "none";
+    document.body.style.webkitUserSelect = "none";
 
     function onMove(me) {
       if (!isDraggingRef.current || !eraseStartRef.current) return;
@@ -1112,6 +1122,12 @@ export default function PDFViewer({
       isDraggingRef.current = false;
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup",   onUp);
+
+      // Restore body text selection — was suppressed for the erase drag.
+      document.body.style.userSelect       = "";
+      document.body.style.webkitUserSelect = "";
+      // Clear any accidental selection that formed despite preventDefault
+      window.getSelection()?.removeAllRanges();
 
       const targeted = erasingIdsRef.current;
       if (targeted && targeted.size > 0) {
@@ -1265,7 +1281,7 @@ export default function PDFViewer({
         onMouseUp={handleMouseUp}
         onClick={handleClick}
         style={{
-          userSelect: mode === "annotate" ? "none" : "text",
+          userSelect: (mode === "annotate" || mode === "clear") ? "none" : "text",
           cursor:     MODE_CURSOR[mode],
           position:   "relative",
         }}
