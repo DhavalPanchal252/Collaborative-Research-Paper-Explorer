@@ -309,7 +309,7 @@ function AnnotationPopup({
       onClick={(e) => e.stopPropagation()}
     >
       <div className="annotation-popup-header">
-        <span className="annotation-popup-label">✦ Annotation</span>
+        <span className="annotation-popup-label">✦ Annotation on Highlight</span>
         <button
           className="annotation-popup-close"
           onClick={onClose}
