@@ -174,6 +174,7 @@ async def upload_pdf(file: UploadFile = File(...),session_id: str | None = None)
 
     session["chunks"] = chunks
     session["index"] = index
+    session["pdf_path"] = str(file_path)           # Phase 7.2 — figure extraction
 
     logger.info(
         "Indexed '%s': %d chunks stored.", safe_name, len(chunks)

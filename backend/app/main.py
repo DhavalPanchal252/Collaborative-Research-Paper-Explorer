@@ -3,6 +3,7 @@ from app.routes.upload import router as upload_router
 from app.routes.chat_routes import router as chat_router
 from fastapi.middleware.cors import CORSMiddleware
 from app.routes.explain_routes import router as explain_router
+from app.routes.figure_routes import router as figure_router          # Phase 7.2
 from fastapi.staticfiles import StaticFiles
 
 app = FastAPI()
@@ -18,7 +19,10 @@ app.add_middleware(
 app.include_router(upload_router)
 app.include_router(chat_router)
 app.include_router(explain_router)
+app.include_router(figure_router)                                      # Phase 7.2
+
 app.mount("/uploaded_papers", StaticFiles(directory="uploaded_papers"), name="uploaded_papers")
+app.mount("/static", StaticFiles(directory="static"), name="static")   # Phase 7.2
 
 @app.get("/")
 def home():
