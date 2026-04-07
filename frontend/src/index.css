@@ -24,6 +24,48 @@
   --font-serif: 'Fraunces', Georgia, serif;
   --sidebar-w:  280px;
   --transition: 160ms ease;
+
+  /* ── Theme-specific PDF / component tokens ── */
+  --pdf-bg:              #0f0f0f;
+  --pdf-toolbar-bg:      #141414;
+  --pdf-border-subtle:   rgba(255, 255, 255, 0.06);
+  --pdf-btn-border:      rgba(255, 255, 255, 0.10);
+  --pdf-btn-hover:       rgba(255, 255, 255, 0.05);
+  --code-bg:             rgba(0, 0, 0, 0.38);
+  --inline-code-bg:      rgba(255, 255, 255, 0.07);
+  --subtle-bg:           rgba(255, 255, 255, 0.03);
+  --subtle-border:       rgba(255, 255, 255, 0.07);
+  --subtle-hover:        rgba(255, 255, 255, 0.04);
+}
+
+/* ── Light theme ─────────────────────────────────── */
+[data-theme="light"] {
+  --bg:         #f4f3ef;
+  --surface:    #ffffff;
+  --surface-2:  #eeece7;
+  --border:     #dedad2;
+  --border-2:   #ccc9c0;
+  --accent:     #b5721a;
+  --accent-dim: #d49040;
+  --text:       #1c1a17;
+  --text-2:     #5a5751;
+  --text-3:     #9a9690;
+  --user-bg:    #edeaf6;
+  --user-border:#c8c3e8;
+  --ai-bg:      #f9f8f4;
+  --green:      #2a7a50;
+  --red:        #c03030;
+
+  --pdf-bg:              #e6e4de;
+  --pdf-toolbar-bg:      #f0efe9;
+  --pdf-border-subtle:   rgba(0, 0, 0, 0.07);
+  --pdf-btn-border:      rgba(0, 0, 0, 0.10);
+  --pdf-btn-hover:       rgba(0, 0, 0, 0.05);
+  --code-bg:             rgba(0, 0, 0, 0.05);
+  --inline-code-bg:      rgba(0, 0, 0, 0.05);
+  --subtle-bg:           rgba(0, 0, 0, 0.03);
+  --subtle-border:       rgba(0, 0, 0, 0.07);
+  --subtle-hover:        rgba(0, 0, 0, 0.04);
 }
 
 /* ─── Reset ──────────────────────────────────────────────────── */
@@ -36,6 +78,7 @@ body {
   font-size: 13.5px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  transition: background 220ms ease, color 220ms ease;
 }
 button { cursor: pointer; font-family: inherit; font-size: inherit; border: none; background: none; }
 textarea { font-family: inherit; font-size: inherit; }
@@ -376,14 +419,14 @@ textarea { font-family: inherit; font-size: inherit; }
 .msg-content { word-break: break-word; }
 .msg-inline-code {
   font-family: var(--font-mono);
-  background: rgba(255,255,255,0.07);
+  background: var(--inline-code-bg);
   padding: 1px 5px;
   border-radius: 4px;
   font-size: 12.5px;
 }
 .msg-code-block {
   font-family: var(--font-mono);
-  background: rgba(0,0,0,0.4);
+  background: var(--code-bg);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px 14px;
@@ -448,13 +491,13 @@ textarea { font-family: inherit; font-size: inherit; }
 /* ─── Spinner ────────────────────────────────────────────────── */
 .spinner {
   width: 18px; height: 18px;
-  border: 2px solid rgba(255,255,255,0.15);
-  border-top-color: #fff;
+  border: 2px solid var(--pdf-btn-border);
+  border-top-color: var(--text);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
   display: inline-block;
 }
-.spinner--sm { width: 14px; height: 14px; border-top-color: #1a0f00; border-color: rgba(26,15,0,0.2); border-top-color: #1a0f00; }
+.spinner--sm { width: 14px; height: 14px; border-color: rgba(0,0,0,0.2); border-top-color: #1a0f00; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ─── Scrollbar global ───────────────────────────────────────── */
@@ -490,7 +533,7 @@ textarea { font-family: inherit; font-size: inherit; }
   flex: 0 0 65%;
   max-width: 65%;
   overflow: hidden;
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  border-right: 1px solid var(--pdf-border-subtle);
 }
 
 .workspace-chat {
@@ -510,7 +553,7 @@ textarea { font-family: inherit; font-size: inherit; }
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: #0f0f0f;
+  background: var(--pdf-bg);
 }
 
 /* Toolbar */
@@ -531,7 +574,7 @@ textarea { font-family: inherit; font-size: inherit; }
 
 .pdf-toolbar-name {
   font-size: 13px;
-  color: #ccc;
+  color: var(--text);
   font-weight: 500;
   flex: 1;
   white-space: nowrap;
@@ -541,16 +584,16 @@ textarea { font-family: inherit; font-size: inherit; }
 
 .pdf-toolbar-pages {
   font-size: 11px;
-  color: #555;
+  color: var(--text-3);
   white-space: nowrap;
 }
 
 .pdf-hint {
   font-size: 10px;
-  color: #444;
+  color: var(--text-3);
   white-space: nowrap;
   padding: 3px 8px;
-  border: 1px solid #2a2a2a;
+  border: 1px solid var(--border);
   border-radius: 4px;
   letter-spacing: 0.02em;
 }
@@ -576,7 +619,7 @@ textarea { font-family: inherit; font-size: inherit; }
 
   /* Custom scrollbar */
   scrollbar-width: thin;
-  scrollbar-color: #2a2a2a transparent;
+  scrollbar-color: var(--border-2) transparent;
 }
 .pdf-page canvas {
   transform: translateZ(0);
@@ -585,7 +628,7 @@ textarea { font-family: inherit; font-size: inherit; }
   width: 6px;
 }
 .pdf-scroll-area::-webkit-scrollbar-thumb {
-  background: #2a2a2a;
+  background: var(--border-2);
   border-radius: 3px;
 }
 
@@ -608,7 +651,7 @@ textarea { font-family: inherit; font-size: inherit; }
   align-items: center;
   gap: 12px;
   padding: 60px;
-  color: #555;
+  color: var(--text-3);
   font-size: 14px;
 }
 
@@ -632,8 +675,8 @@ textarea { font-family: inherit; font-size: inherit; }
   display: flex;
   align-items: center;
   gap: 4px;
-  background: #1c1c1c;
-  border: 1px solid rgba(255, 165, 0, 0.35);
+  background: var(--surface);
+  border: 1px solid rgba(232, 160, 74, 0.35);
   border-radius: 8px;
   padding: 4px 4px 4px 6px;
   box-shadow:
@@ -657,9 +700,9 @@ textarea { font-family: inherit; font-size: inherit; }
   transform: translateX(-50%);
   width: 8px;
   height: 8px;
-  background: #1c1c1c;
-  border-right: 1px solid rgba(255, 165, 0, 0.35);
-  border-bottom: 1px solid rgba(255, 165, 0, 0.35);
+  background: var(--surface);
+  border-right: 1px solid rgba(232, 160, 74, 0.35);
+  border-bottom: 1px solid rgba(232, 160, 74, 0.35);
   clip-path: polygon(0 0, 100% 100%, 0 100%);
   rotate: 45deg;
   /* override the transform from parent so we only use left */
@@ -674,7 +717,7 @@ textarea { font-family: inherit; font-size: inherit; }
   background: rgba(255, 165, 0, 0.12);
   border: none;
   border-radius: 6px;
-  color: #ffa500;
+  color: var(--accent);
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -693,7 +736,7 @@ textarea { font-family: inherit; font-size: inherit; }
 
 .tooltip-icon {
   font-size: 11px;
-  color: #ffa500;
+  color: var(--accent);
 }
 
 .tooltip-dismiss-btn {
@@ -705,15 +748,15 @@ textarea { font-family: inherit; font-size: inherit; }
   background: transparent;
   border: none;
   border-radius: 4px;
-  color: #555;
+  color: var(--text-3);
   font-size: 11px;
   cursor: pointer;
   transition: color 0.15s, background 0.15s;
 }
 
 .tooltip-dismiss-btn:hover {
-  color: #999;
-  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-2);
+  background: var(--pdf-btn-hover);
 }
 
 /* Tiny spinner variant for tooltip */
@@ -734,7 +777,7 @@ textarea { font-family: inherit; font-size: inherit; }
   align-items: center;
   gap: 4px;
   font-size: 10px;
-  color: #ffa500;
+  color: var(--accent);
   opacity: 0.7;
   margin-bottom: 4px;
   letter-spacing: 0.04em;
@@ -759,8 +802,8 @@ textarea { font-family: inherit; font-size: inherit; }
   flex-direction: column;
   gap: 8px;
   padding: 10px 12px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: var(--subtle-bg);
+  border: 1px solid var(--subtle-border);
   border-radius: 8px;
 }
 
@@ -778,7 +821,7 @@ textarea { font-family: inherit; font-size: inherit; }
 .paper-info-name {
   font-size: 12px;
   font-weight: 600;
-  color: #ddd;
+  color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -793,9 +836,9 @@ textarea { font-family: inherit; font-size: inherit; }
   font-size: 10px;
   padding: 2px 7px;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.05);
-  color: #666;
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: var(--subtle-bg);
+  color: var(--text-3);
+  border: 1px solid var(--subtle-border);
   font-variant-numeric: tabular-nums;
 }
 
@@ -828,7 +871,7 @@ textarea { font-family: inherit; font-size: inherit; }
   background: transparent;
   border: none;
   border-radius: 6px;
-  color: #666;
+  color: var(--text-3);
   font-size: 12px;
   font-family: inherit;
   text-align: left;
@@ -837,13 +880,13 @@ textarea { font-family: inherit; font-size: inherit; }
 }
 
 .section-item:hover {
-  background: rgba(255, 255, 255, 0.04);
-  color: #bbb;
+  background: var(--subtle-hover);
+  color: var(--text-2);
 }
 
 .section-item--active {
-  background: rgba(255, 165, 0, 0.08);
-  color: #ffa500;
+  background: rgba(232, 160, 74, 0.08);
+  color: var(--accent);
   font-weight: 500;
 }
 
@@ -874,29 +917,29 @@ textarea { font-family: inherit; font-size: inherit; }
 
 .notes-empty-text {
   font-size: 11px;
-  color: #555;
+  color: var(--text-3);
   font-weight: 500;
   margin: 0;
 }
 
 .notes-empty-sub {
   font-size: 10px;
-  color: #3a3a3a;
+  color: var(--text-3);
   margin: 0;
   line-height: 1.5;
 }
 
 .note-item {
   padding: 8px 10px;
-  background: rgba(255, 255, 255, 0.03);
-  border-left: 2px solid rgba(255, 165, 0, 0.4);
+  background: var(--subtle-bg);
+  border-left: 2px solid rgba(232, 160, 74, 0.4);
   border-radius: 0 6px 6px 0;
   margin-bottom: 6px;
 }
 
 .note-item-text {
   font-size: 11px;
-  color: #aaa;
+  color: var(--text-2);
   margin: 0;
   line-height: 1.5;
 }
@@ -907,8 +950,8 @@ textarea { font-family: inherit; font-size: inherit; }
   font-size: 9px;
   padding: 1px 6px;
   border-radius: 3px;
-  background: rgba(255, 165, 0, 0.1);
-  color: #ffa500;
+  background: rgba(232, 160, 74, 0.1);
+  color: var(--accent);
 }
 /* ─────────────────────────────────────────────────────────────────────────────
    GLOBAL HEADER LAYOUT — append to bottom of index.css
@@ -1070,8 +1113,8 @@ textarea { font-family: inherit; font-size: inherit; }
   padding: 0 16px;
   height: 44px;
   gap: 0;
-  background: #141414;                          /* same as existing pdf-toolbar */
-  border-bottom: 1px solid rgba(255,255,255,0.06);
+  background: var(--pdf-toolbar-bg);
+  border-bottom: 1px solid var(--pdf-border-subtle);
   flex-shrink: 0;
 }
 
@@ -1091,7 +1134,7 @@ textarea { font-family: inherit; font-size: inherit; }
   display: inline-block;
   width: 1px;
   height: 18px;
-  background: rgba(255,255,255,0.1);
+  background: var(--pdf-btn-border);
   margin: 0 10px;
   flex-shrink: 0;
 }
@@ -1118,8 +1161,8 @@ textarea { font-family: inherit; font-size: inherit; }
 
 .pdf-tool-btn:hover {
   color: var(--text);
-  background: rgba(255,255,255,0.05);
-  border-color: rgba(255,255,255,0.1);
+  background: var(--pdf-btn-hover);
+  border-color: var(--pdf-btn-border);
 }
 
 /* Active / selected mode */
@@ -1145,7 +1188,7 @@ textarea { font-family: inherit; font-size: inherit; }
   display: inline-flex;
   align-items: center;
   gap: 0;
-  border: 1px solid rgba(255,255,255,0.1);
+  border: 1px solid var(--pdf-btn-border);
   border-radius: 6px;
   overflow: hidden;
   margin-right: 4px;
@@ -1169,7 +1212,7 @@ textarea { font-family: inherit; font-size: inherit; }
 
 .pdf-zoom-btn:hover {
   color: var(--text);
-  background: rgba(255,255,255,0.06);
+  background: var(--pdf-btn-hover);
 }
 
 .pdf-zoom-label {
@@ -1179,8 +1222,8 @@ textarea { font-family: inherit; font-size: inherit; }
   min-width: 36px;
   text-align: center;
   padding: 0 2px;
-  border-left: 1px solid rgba(255,255,255,0.08);
-  border-right: 1px solid rgba(255,255,255,0.08);
+  border-left: 1px solid var(--pdf-btn-border);
+  border-right: 1px solid var(--pdf-btn-border);
   line-height: 28px;
   font-variant-numeric: tabular-nums;
 }
@@ -1192,7 +1235,7 @@ textarea { font-family: inherit; font-size: inherit; }
   color: var(--text-3);
   white-space: nowrap;
   padding: 4px 8px;
-  border: 1px solid rgba(255,255,255,0.07);
+  border: 1px solid var(--pdf-btn-border);
   border-radius: 5px;
   font-variant-numeric: tabular-nums;
 }
@@ -2431,4 +2474,58 @@ textarea { font-family: inherit; font-size: inherit; }
   color: var(--red);
   border-color: rgba(224, 92, 92, 0.4);
   background: rgba(224, 92, 92, 0.06);
+}
+/* ══════════════════════════════════════════════════════════════════════════════
+   PHASE X — THEME SYSTEM ADDITIONS
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Light-mode targeted overrides (can't be done via variables alone) ─────── */
+[data-theme="light"] .annotation-popup {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.18),
+    0 0 0 1px rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="light"] .pdf-page {
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.18);
+}
+
+[data-theme="light"] .pdf-highlight {
+  mix-blend-mode: multiply;
+}
+
+[data-theme="light"] .sidebar {
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.06);
+}
+
+/* Scrollbar in light mode */
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: var(--border-2);
+}
+
+/* ── Theme toggle button ────────────────────────────────────────────────────── */
+.theme-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    color var(--transition),
+    background var(--transition),
+    border-color var(--transition);
+}
+
+.theme-toggle-btn:hover {
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: var(--border-2);
 }

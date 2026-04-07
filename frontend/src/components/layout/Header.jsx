@@ -8,15 +8,13 @@ const NAV_TABS = [
   { id: "export",   label: "Export" },
 ];
 
-export default function Header({ model, uploadMeta, onTabChange }) {
+export default function Header({ model, uploadMeta, onTabChange, theme, setTheme }) {
   const [activeTab, setActiveTab] = useState("pdf");
 
   function handleTab(id) {
     setActiveTab(id);
     onTabChange?.(id);
   }
-
-  const chunks = uploadMeta?.chunks_created ?? "—";
 
   return (
     <header className="app-header">
@@ -44,12 +42,16 @@ export default function Header({ model, uploadMeta, onTabChange }) {
         ))}
       </nav>
 
-      {/* RIGHT: chunks + model pill */}
+      {/* RIGHT: theme toggle + model pill */}
       <div className="app-header-right">
-        <span className="app-header-chunks">
-          <span className="status-dot" data-ready="true" />
-          {chunks} chunks
-        </span>
+        <button
+          className="theme-toggle-btn"
+          onClick={() => setTheme?.(theme === "dark" ? "light" : "dark")}
+          title="Toggle theme"
+          aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+        >
+          {theme === "dark" ? "☀" : "☾"}
+        </button>
         <span className={`chat-model-pill chat-model-pill--${model}`}>
           {model === "groq" ? "⚡ Groq" : "🖥 Ollama"}
         </span>

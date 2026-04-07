@@ -3,7 +3,7 @@
 // onExplainRequest now receives (text, highlightId) and threads highlightId
 // through to the chat message so clicking it scrolls back to the highlight.
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import UploadPanel    from "./components/UploadPanel";
 import ChatPanel      from "./components/ChatPanel";
 import PDFViewer      from "./components/PDFViewer";
@@ -25,7 +25,22 @@ export default function App() {
   const [injectMessage, setInjectMessage]     = useState(null);
   const [explainResult, setExplainResult]     = useState(null);
 
-  // ── Phase 6: Notes — mirror of PDFViewer highlights ──────────────────────
+  // ── Phase X: Theme system ─────────────────────────────────────────────────
+  const [theme, setTheme] = useState(() => {
+    const saved = localStorage.getItem("arxivmind_theme");
+    const resolved = (saved === "dark" || saved === "light")
+      ? saved
+      : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    // Apply synchronously during state init to prevent flash
+    document.documentElement.setAttribute("data-theme", resolved);
+    return resolved;
+  });
+
+  // Keep <html> in sync on every change
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("arxivmind_theme", theme);
+  }, [theme]);
   const [highlights, setHighlights]           = useState([]);
   const [deleteHighlightId, setDeleteHighlightId] = useState(null);
 
@@ -138,7 +153,7 @@ export default function App() {
   if (hasPaper) {
     return (
       <div className="app-paper-layout">
-        <Header model={model} uploadMeta={uploadMeta} />
+        <Header model={model} uploadMeta={uploadMeta} theme={theme} setTheme={setTheme} />
 
         <div className="app-paper-body">
           {/* Sidebar */}
