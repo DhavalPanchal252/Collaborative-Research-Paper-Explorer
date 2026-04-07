@@ -172,6 +172,9 @@ async def upload_pdf(file: UploadFile = File(...),session_id: str | None = None)
    
     session_id, session = _get_or_create_session(session_id)
 
+    # 🔥 CACHE INVALIDATION: clear old figures when new PDF is uploaded
+    session.pop("figures", None)
+
     session["chunks"] = chunks
     session["index"] = index
     session["pdf_path"] = str(file_path)           # Phase 7.2 — figure extraction
