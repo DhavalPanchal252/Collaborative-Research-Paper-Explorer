@@ -2231,3 +2231,203 @@ textarea { font-family: inherit; font-size: inherit; }
     inset 0 -2px 0 0 rgba(90, 190, 255, 0.80);
   transition: background 120ms ease, box-shadow 120ms ease;
 }
+/* ══════════════════════════════════════════════════════════════════════════════
+   PHASE 6 — NOTES PANEL
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Container ───────────────────────────────────────────────────────────────── */
+.notes-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow-y: auto;
+  max-height: 340px;
+  scroll-behavior: smooth; /* merged */
+}
+
+
+/* ── Empty state ─────────────────────────────────────────────────────────────── */
+.notes-panel--empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  opacity: 0.85;
+  padding: 20px 12px;
+  text-align: center;
+}
+
+.notes-empty-icon {
+  font-size: 20px;
+  color: var(--text-3);
+  opacity: 0.6;
+}
+
+.notes-empty-text {
+  font-size: 12px;
+  color: var(--text-2);
+  font-weight: 500;
+}
+
+.notes-empty-sub {
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.5;
+}
+
+/* ── Note item ───────────────────────────────────────────────────────────────── */
+.note-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--transition), transform 0.1s ease;
+}
+
+.note-item:last-child {
+  border-bottom: none;
+}
+
+.note-item:hover {
+  background: var(--surface-2);
+  box-shadow: 0 1px 2px rgba(247, 2, 2, 0.136);
+}
+
+.note-item-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/* ── Quoted excerpt ──────────────────────────────────────────────────────────── */
+.note-item-quote {
+  font-size: 11.5px;
+  color: var(--text);
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.note-item-quote-mark {
+  color: var(--accent);
+  font-family: var(--font-serif);
+  font-size: 13px;
+  font-style: italic;
+  margin: 0 1px;
+}
+
+/* ── Labels ──────────────────────────────────────────────────────────────────── */
+.note-item-label {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+
+.note-item-label--ai {
+  color: var(--accent);
+  background: rgba(232, 160, 74, 0.08);
+  border-color: rgba(232, 160, 74, 0.22);
+}
+
+/* ── User note ───────────────────────────────────────────────────────────────── */
+.note-item-user {
+  font-size: 11px;
+  color: var(--text-2);
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+/* ── AI explanation preview ──────────────────────────────────────────────────── */
+.note-item-ai {
+  font-size: 11px;
+  color: var(--text-2);
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+/* ── AI loading shimmer ──────────────────────────────────────────────────────── */
+.note-item-ai-loading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.note-item-ai-loading-text {
+  font-size: 11px;
+  color: var(--text-3);
+  font-style: italic;
+}
+
+/* ── Timestamp ───────────────────────────────────────────────────────────────── */
+.note-item-time {
+  font-size: 10px;
+  color: var(--text-3);
+  margin-top: 2px;
+}
+
+/* ── Action buttons ──────────────────────────────────────────────────────────── */
+.note-item-actions {
+  display: flex;
+  gap: 5px;
+  margin-top: 8px;
+  opacity: 0;
+  pointer-events: none;   /* 👈 ADD THIS */
+  transition: opacity var(--transition);
+  
+}
+
+.note-item:hover .note-item-actions {
+  opacity: 1;
+  pointer-events: auto;   /* 👈 ADD THIS */
+}
+.note-item:active {
+  transform: scale(0.995);
+}
+
+.note-item.active {
+  background: var(--surface-3);
+  border-left: 2px solid var(--accent);
+  padding-left: 10px; /* 👈 adjust for border */
+}
+
+.note-action-btn {
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 3px 9px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  transition: color var(--transition), background var(--transition), border-color var(--transition);
+  letter-spacing: 0.02em;
+}
+
+.note-action-btn:hover {
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: var(--border-2);
+}
+
+.note-action-btn--view:hover {
+  color: var(--accent);
+  border-color: rgba(232, 160, 74, 0.4);
+  background: rgba(232, 160, 74, 0.06);
+}
+
+.note-action-btn--delete:hover {
+  color: var(--red);
+  border-color: rgba(224, 92, 92, 0.4);
+  background: rgba(224, 92, 92, 0.06);
+}

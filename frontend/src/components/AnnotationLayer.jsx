@@ -57,6 +57,7 @@ export default function AnnotationLayer({
               isActive  ? "pdf-annotation-marker--active" : "",
               ann.note  ? "pdf-annotation-marker--noted"  : "",
             ].filter(Boolean).join(" ")}
+            
             style={{ left: renderX, top: renderY }}
             onClick={(e) => { e.stopPropagation(); onMarkerClick(e, ann); }}
             title={ann.note ? ann.note : "Annotation (click to edit)"}

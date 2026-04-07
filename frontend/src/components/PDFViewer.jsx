@@ -593,6 +593,9 @@ export default function PDFViewer({
   onExplainResultConsumed,
   focusedHighlightId,
   onFocusedHighlightConsumed,
+  onHighlightsChange,
+  deleteHighlightId,
+  onDeleteHighlightConsumed,
 }) {
   const [numPages, setNumPages]               = useState(null);
   const [loadError, setLoadError]             = useState(null);
@@ -655,6 +658,16 @@ export default function PDFViewer({
   useEffect(() => { modeRef.current        = mode;            }, [mode]);
   useEffect(() => { erasingIdsRef.current  = erasingIds;      }, [erasingIds]);
   useEffect(() => () => clearTimeout(explainTimeoutRef.current), []);
+
+  // ── Mirror highlights to parent (NotesPanel source of truth) ─────────────
+  useEffect(() => { onHighlightsChange?.(highlights); }, [highlights]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── External delete (from NotesPanel) ─────────────────────────────────────
+  useEffect(() => {
+    if (!deleteHighlightId) return;
+    handleDeleteHighlight(deleteHighlightId);
+    onDeleteHighlightConsumed?.();
+  }, [deleteHighlightId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Initialise baseWidth once the container is in the DOM ────────────────
   // (lazy: set on first access, not in useEffect, to keep pageWidth in sync)

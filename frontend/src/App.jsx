@@ -25,6 +25,10 @@ export default function App() {
   const [injectMessage, setInjectMessage]     = useState(null);
   const [explainResult, setExplainResult]     = useState(null);
 
+  // ── Phase 6: Notes — mirror of PDFViewer highlights ──────────────────────
+  const [highlights, setHighlights]           = useState([]);
+  const [deleteHighlightId, setDeleteHighlightId] = useState(null);
+
   // Bidirectional link: when user clicks a chat message with a highlightId,
   // this triggers PDFViewer to scroll + flash the corresponding highlight.
   const [focusedHighlightId, setFocusedHighlightId] = useState(null);
@@ -58,6 +62,8 @@ export default function App() {
     setInjectMessage(null);
     setExplainResult(null);
     setFocusedHighlightId(null);
+    setHighlights([]);
+    setDeleteHighlightId(null);
     pendingHighlightIdRef.current = null;
   }
 
@@ -116,6 +122,12 @@ export default function App() {
     setFocusedHighlightId(id);
   }, []);
 
+  // ── Notes system callbacks ─────────────────────────────────────────────────
+  const handleHighlightsChange      = useCallback((hs) => setHighlights(hs), []);
+  const handleSelectHighlight       = useCallback((h)  => setFocusedHighlightId(h.id), []);
+  const handleDeleteHighlightFromNotes = useCallback((id) => setDeleteHighlightId(id), []);
+  const handleDeleteHighlightConsumed  = useCallback(() => setDeleteHighlightId(null), []);
+
   const handleInjectConsumed          = useCallback(() => setInjectMessage(null),  []);
   const handleExplainResultConsumed   = useCallback(() => setExplainResult(null),  []);
   const handleFocusedHighlightConsumed = useCallback(() => setFocusedHighlightId(null), []);
@@ -141,7 +153,12 @@ export default function App() {
             </div>
             <div className="sidebar-section">
               <p className="section-label">NOTES</p>
-              <NotesPanel />
+              <NotesPanel
+                highlights={highlights}
+                onSelectHighlight={handleSelectHighlight}
+                onDeleteHighlight={handleDeleteHighlightFromNotes}
+                activeId={focusedHighlightId}   // 👈 ADD THIS
+              />
             </div>
             <div className="sidebar-footer">
               <span className="status-dot" data-ready="true" />
@@ -159,6 +176,9 @@ export default function App() {
               onExplainResultConsumed={handleExplainResultConsumed}
               focusedHighlightId={focusedHighlightId}       // Phase 4+ bidirectional
               onFocusedHighlightConsumed={handleFocusedHighlightConsumed}
+              onHighlightsChange={handleHighlightsChange}   // Phase 6 notes
+              deleteHighlightId={deleteHighlightId}         // Phase 6 notes
+              onDeleteHighlightConsumed={handleDeleteHighlightConsumed}
             />
           </div>
 
