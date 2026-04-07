@@ -1,18 +1,16 @@
 // src/components/layout/Header.jsx
-import { useState } from "react";
+// Phase 7.1: activeTab + onTabChange now controlled by App.jsx (lifted state).
+// Internal `useState` for activeTab removed — App is the single source of truth.
 
 const NAV_TABS = [
   { id: "pdf",      label: "PDF View" },
   { id: "citation", label: "Citation Graph" },
-  { id: "figure",   label: "Figure Explorer" },
+  { id: "figures",  label: "Figure Explorer" },
   { id: "export",   label: "Export" },
 ];
 
-export default function Header({ model, uploadMeta, onTabChange, theme, setTheme }) {
-  const [activeTab, setActiveTab] = useState("pdf");
-
+export default function Header({ model, uploadMeta, onTabChange, activeTab = "pdf", theme, setTheme }) {
   function handleTab(id) {
-    setActiveTab(id);
     onTabChange?.(id);
   }
 

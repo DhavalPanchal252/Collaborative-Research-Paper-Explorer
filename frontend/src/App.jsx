@@ -1,7 +1,6 @@
 // src/App.jsx
-// Phase 4+: bidirectional chat↔PDF linking.
-// onExplainRequest now receives (text, highlightId) and threads highlightId
-// through to the chat message so clicking it scrolls back to the highlight.
+// Phase 7.1: Figure Explorer mode added via top-level `viewMode` state.
+// All existing PDF/Chat logic is untouched.
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import UploadPanel    from "./components/UploadPanel";
@@ -12,6 +11,7 @@ import PaperInfo      from "./components/sidebar/PaperInfo";
 import SectionsPanel  from "./components/sidebar/SectionsPanel";
 import NotesPanel     from "./components/sidebar/NotesPanel";
 import Header         from "./components/layout/Header";
+import FigureExplorer from "./components/FigureExplorer";
 import { uploadPDF }  from "./api/upload";
 import { explainSelection } from "./api/explain";
 
@@ -25,31 +25,28 @@ export default function App() {
   const [injectMessage, setInjectMessage]     = useState(null);
   const [explainResult, setExplainResult]     = useState(null);
 
+  // ── Phase 7.1: View mode ──────────────────────────────────────────────────
+  // "pdf" | "figures" | "citation" | "export"
+  const [viewMode, setViewMode] = useState("pdf");
+
   // ── Phase X: Theme system ─────────────────────────────────────────────────
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem("arxivmind_theme");
     const resolved = (saved === "dark" || saved === "light")
       ? saved
       : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-    // Apply synchronously during state init to prevent flash
     document.documentElement.setAttribute("data-theme", resolved);
     return resolved;
   });
 
-  // Keep <html> in sync on every change
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem("arxivmind_theme", theme);
   }, [theme]);
+
   const [highlights, setHighlights]           = useState([]);
   const [deleteHighlightId, setDeleteHighlightId] = useState(null);
-
-  // Bidirectional link: when user clicks a chat message with a highlightId,
-  // this triggers PDFViewer to scroll + flash the corresponding highlight.
   const [focusedHighlightId, setFocusedHighlightId] = useState(null);
-
-  // Track which highlightId the current explain call belongs to so we can
-  // include it in the chat message (enabling the ↗ PDF link button).
   const pendingHighlightIdRef = useRef(null);
 
   // ── Upload ────────────────────────────────────────────────────────────────
@@ -79,14 +76,11 @@ export default function App() {
     setFocusedHighlightId(null);
     setHighlights([]);
     setDeleteHighlightId(null);
+    setViewMode("pdf");
     pendingHighlightIdRef.current = null;
   }
 
   // ── Explain flow ──────────────────────────────────────────────────────────
-  // PDFViewer passes (text, highlightId) so we can:
-  //   1. Store highlightId for inclusion in the chat message
-  //   2. Include it in explainResult so PDFViewer can attach it to the highlight
-  //   3. Include it in injectMessage so ChatPanel can show the ↗ PDF link
 
   const handleExplainRequest = useCallback(
     async (selectedText, highlightId = null) => {
@@ -105,14 +99,12 @@ export default function App() {
           model
         );
 
-        // 1. Inject into chat (with highlightId for the ↗ PDF button)
         setInjectMessage({
           question:    userQuestion,
           answer:      answer?.trim() ? answer : "⚠ Model returned empty response. Try again.",
           highlightId: pendingHighlightIdRef.current,
         });
 
-        // 2. Route result back to PDFViewer to attach to highlight
         setExplainResult({ text: selectedText, answer, source_chunks, confidence });
 
       } catch (err) {
@@ -131,21 +123,27 @@ export default function App() {
     [model, explainLoading]
   );
 
-  // ── Bidirectional: chat → PDF ─────────────────────────────────────────────
-  // Called by ChatPanel → ChatMessage when user clicks the ↗ PDF link.
-  const handleHighlightFocus = useCallback((id) => {
-    setFocusedHighlightId(id);
-  }, []);
+  const handleHighlightFocus = useCallback((id) => setFocusedHighlightId(id), []);
 
-  // ── Notes system callbacks ─────────────────────────────────────────────────
-  const handleHighlightsChange      = useCallback((hs) => setHighlights(hs), []);
-  const handleSelectHighlight       = useCallback((h)  => setFocusedHighlightId(h.id), []);
+  const handleHighlightsChange         = useCallback((hs) => setHighlights(hs), []);
+  const handleSelectHighlight          = useCallback((h)  => setFocusedHighlightId(h.id), []);
   const handleDeleteHighlightFromNotes = useCallback((id) => setDeleteHighlightId(id), []);
   const handleDeleteHighlightConsumed  = useCallback(() => setDeleteHighlightId(null), []);
-
-  const handleInjectConsumed          = useCallback(() => setInjectMessage(null),  []);
-  const handleExplainResultConsumed   = useCallback(() => setExplainResult(null),  []);
+  const handleInjectConsumed           = useCallback(() => setInjectMessage(null), []);
+  const handleExplainResultConsumed    = useCallback(() => setExplainResult(null), []);
   const handleFocusedHighlightConsumed = useCallback(() => setFocusedHighlightId(null), []);
+
+  // ── Figure Explorer hooks (pre-wired for Phase 7.2+) ─────────────────────
+  const handleFigureExplain = useCallback((figureId) => {
+    console.log("Explain figure", figureId);
+    // Phase 7.2: will inject into ChatPanel
+  }, []);
+
+  const handleFigureGoToPDF = useCallback((page) => {
+    console.log("Go to PDF page", page);
+    setViewMode("pdf");
+    // Phase 7.2: will call scrollToPage on PDFViewer
+  }, []);
 
   const hasPaper = !!uploadedFile;
 
@@ -153,10 +151,17 @@ export default function App() {
   if (hasPaper) {
     return (
       <div className="app-paper-layout">
-        <Header model={model} uploadMeta={uploadMeta} theme={theme} setTheme={setTheme} />
+        <Header
+          model={model}
+          uploadMeta={uploadMeta}
+          theme={theme}
+          setTheme={setTheme}
+          activeTab={viewMode}
+          onTabChange={setViewMode}
+        />
 
         <div className="app-paper-body">
-          {/* Sidebar */}
+          {/* Sidebar — always visible regardless of view mode */}
           <aside className="sidebar">
             <div className="sidebar-section">
               <p className="section-label">PAPER</p>
@@ -172,7 +177,7 @@ export default function App() {
                 highlights={highlights}
                 onSelectHighlight={handleSelectHighlight}
                 onDeleteHighlight={handleDeleteHighlightFromNotes}
-                activeId={focusedHighlightId}   // 👈 ADD THIS
+                activeId={focusedHighlightId}
               />
             </div>
             <div className="sidebar-footer">
@@ -181,38 +186,51 @@ export default function App() {
             </div>
           </aside>
 
-          {/* PDF Viewer */}
-          <div className="paper-pdf">
-            <PDFViewer
-              file={uploadedFile}
-              onExplainRequest={handleExplainRequest}      // (text, highlightId) => void
-              explainLoading={explainLoading}
-              explainResult={explainResult}
-              onExplainResultConsumed={handleExplainResultConsumed}
-              focusedHighlightId={focusedHighlightId}       // Phase 4+ bidirectional
-              onFocusedHighlightConsumed={handleFocusedHighlightConsumed}
-              onHighlightsChange={handleHighlightsChange}   // Phase 6 notes
-              deleteHighlightId={deleteHighlightId}         // Phase 6 notes
-              onDeleteHighlightConsumed={handleDeleteHighlightConsumed}
-            />
-          </div>
+          {/* ── Center panel: mode-switched ── */}
+          {viewMode === "figures" ? (
+            // Figure Explorer spans full remaining width (no chat panel beside it)
+            <div className="paper-pdf paper-pdf--full">
+              <FigureExplorer
+                onExplain={handleFigureExplain}
+                onGoToPDF={handleFigureGoToPDF}
+              />
+            </div>
+          ) : (
+            <>
+              {/* PDF Viewer */}
+              <div className="paper-pdf">
+                <PDFViewer
+                  file={uploadedFile}
+                  onExplainRequest={handleExplainRequest}
+                  explainLoading={explainLoading}
+                  explainResult={explainResult}
+                  onExplainResultConsumed={handleExplainResultConsumed}
+                  focusedHighlightId={focusedHighlightId}
+                  onFocusedHighlightConsumed={handleFocusedHighlightConsumed}
+                  onHighlightsChange={handleHighlightsChange}
+                  deleteHighlightId={deleteHighlightId}
+                  onDeleteHighlightConsumed={handleDeleteHighlightConsumed}
+                />
+              </div>
 
-          {/* Chat */}
-          <div className="paper-chat">
-            <ChatPanel
-              model={model}
-              paperName={uploadedFile.name}
-              injectMessage={injectMessage}
-              onInjectConsumed={handleInjectConsumed}
-              onHighlightClick={handleHighlightFocus}  // Phase 4+ bidirectional
-            />
-          </div>
+              {/* Chat */}
+              <div className="paper-chat">
+                <ChatPanel
+                  model={model}
+                  paperName={uploadedFile.name}
+                  injectMessage={injectMessage}
+                  onInjectConsumed={handleInjectConsumed}
+                  onHighlightClick={handleHighlightFocus}
+                />
+              </div>
+            </>
+          )}
         </div>
       </div>
     );
   }
 
-  /* ─── HOME SCREEN (unchanged) ────────────────────────────────────────────── */
+  /* ─── HOME SCREEN ────────────────────────────────────────────────────────── */
   return (
     <div className="app-shell">
       <aside className="sidebar">
