@@ -2475,6 +2475,145 @@ textarea { font-family: inherit; font-size: inherit; }
   border-color: rgba(224, 92, 92, 0.4);
   background: rgba(224, 92, 92, 0.06);
 }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   PHASE 6.5 — NOTES SEARCH + FILTER
+   Append these rules to the bottom of index.css
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Controls row (search + filter pills) ────────────────────────────────── */
+.notes-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px 10px 7px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+/* ── Search field ─────────────────────────────────────────────────────────── */
+.notes-search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0 8px;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+
+.notes-search-wrap:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(232, 160, 74, 0.10);
+}
+
+.notes-search-icon {
+  font-size: 11px;
+  line-height: 1;
+  flex-shrink: 0;
+  opacity: 0.55;
+  user-select: none;
+}
+
+.notes-search-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  padding: 5px 0;
+  caret-color: var(--accent);
+}
+
+.notes-search-input::placeholder {
+  color: var(--text-3);
+}
+
+.notes-search-clear {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-3);
+  border-radius: 3px;
+  transition: color var(--transition), background var(--transition);
+}
+
+.notes-search-clear:hover {
+  color: var(--text);
+  background: var(--border);
+}
+
+/* ── Filter pills ─────────────────────────────────────────────────────────── */
+.notes-filter-pills {
+  display: flex;
+  gap: 4px;
+}
+
+.notes-filter-pill {
+  flex: 1;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 3px 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-3);
+  text-align: center;
+  transition:
+    color var(--transition),
+    background var(--transition),
+    border-color var(--transition);
+}
+
+.notes-filter-pill:hover {
+  color: var(--text-2);
+  border-color: var(--border-2);
+  background: var(--surface-2);
+}
+
+.notes-filter-pill--active {
+  color: var(--accent);
+  border-color: rgba(232, 160, 74, 0.45);
+  background: rgba(232, 160, 74, 0.08);
+}
+
+.notes-filter-pill--active:hover {
+  background: rgba(232, 160, 74, 0.12);
+}
+
+/* ── No-match empty state ─────────────────────────────────────────────────── */
+.notes-panel--no-match {
+  padding: 18px 12px;
+}
+
+/* ── Search match highlight mark ──────────────────────────────────────────── */
+.notes-match-mark {
+  background: rgba(232, 160, 74, 0.28);
+  color: var(--accent);
+  border-radius: 2px;
+  padding: 0 1px;
+  font-style: normal;
+}
+
+[data-theme="light"] .notes-match-mark {
+  background: rgba(181, 114, 26, 0.18);
+  color: var(--accent);
+}
+
 /* ══════════════════════════════════════════════════════════════════════════════
    PHASE X — THEME SYSTEM ADDITIONS
    ══════════════════════════════════════════════════════════════════════════════ */
