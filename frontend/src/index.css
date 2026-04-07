@@ -2284,8 +2284,9 @@ textarea { font-family: inherit; font-size: inherit; }
   padding: 10px 12px 8px;
   border-bottom: 1px solid var(--border);
   cursor: pointer;
-  user-select: none;
   transition: background var(--transition), transform 0.1s ease;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.173);
+
 }
 
 .note-item:last-child {
