@@ -1,79 +1,75 @@
 // src/components/FigureExplorer.jsx
-// Phase 7.1 — Visual Intelligence Layer: search, filter, grid, modal, skeletons.
+// Phase 7.3 — Real backend integration, debounced search, keyboard nav, error/empty states.
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import FigureToolbar  from "./figure/FigureToolbar";
 import FigureCard     from "./figure/FigureCard";
 import FigureModal    from "./figure/FigureModal";
 import FigureSkeleton from "./figure/FigureSkeleton";
-
-// ── Mock data (replace with API response in Phase 7.2) ────────────────────
-const MOCK_FIGURES = [
-  {
-    id: 1,
-    image: "/fig1.png",
-    caption: "Figure 1: Model architecture overview showing the encoder-decoder transformer stack with cross-attention layers.",
-    page: 3,
-    type: "diagram",
-  },
-  {
-    id: 2,
-    image: "/fig2.png",
-    caption: "Figure 2: Experimental results comparing BLEU scores across baseline, fine-tuned, and proposed models.",
-    page: 5,
-    type: "graph",
-  },
-  {
-    id: 3,
-    image: "/fig3.png",
-    caption: "Figure 3: Attention heatmap visualization for sample input tokens across 12 heads.",
-    page: 7,
-    type: "diagram",
-  },
-  {
-    id: 4,
-    image: "/fig4.png",
-    caption: "Figure 4: Training loss and validation accuracy curves over 50 epochs.",
-    page: 9,
-    type: "graph",
-  },
-  {
-    id: 5,
-    image: "/fig5.png",
-    caption: "Figure 5: Dataset distribution by domain and annotation quality tier.",
-    page: 11,
-    type: "graph",
-  },
-  {
-    id: 6,
-    image: "/fig6.png",
-    caption: "Figure 6: System pipeline diagram illustrating data flow from ingestion to inference.",
-    page: 14,
-    type: "diagram",
-  },
-];
+import { getFigures } from "../services/figureService";
 
 const SKELETON_COUNT = 6;
 
-export default function FigureExplorer({ onExplain, onGoToPDF }) {
-  const [search,        setSearch]        = useState("");
-  const [filter,        setFilter]        = useState("all");
-  const [sortAsc,       setSortAsc]       = useState(true);
-  const [selectedFig,   setSelectedFig]   = useState(null);
-  const [isLoading,     setIsLoading]     = useState(true);
-  const [figures,       setFigures]       = useState([]);
-
-  // Simulate async figure extraction (Phase 7.2: replace with real fetch)
+// ---------------------------------------------------------------------------
+// Debounce hook
+// ---------------------------------------------------------------------------
+function useDebounced(value, delay = 280) {
+  const [debounced, setDebounced] = useState(value);
   useEffect(() => {
-    const t = setTimeout(() => {
-      setFigures(MOCK_FIGURES);
-      setIsLoading(false);
-    }, 1200);
-    return () => clearTimeout(t);
-  }, []);
+    const id = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(id);
+  }, [value, delay]);
+  return debounced;
+}
 
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+export default function FigureExplorer({ onExplain, onGoToPDF }) {
+  // ── Data state ────────────────────────────────────────────────────────────
+  const [figures,   setFigures]   = useState([]);
+  const [loading,   setLoading]   = useState(true);
+  const [error,     setError]     = useState(null);
+
+  // ── UI state ──────────────────────────────────────────────────────────────
+  const [search,      setSearch]      = useState("");
+  const [filter,      setFilter]      = useState("all");
+  const [sortAsc,     setSortAsc]     = useState(true);
+  const [selectedFig, setSelectedFig] = useState(null);
+  const [gridVisible, setGridVisible] = useState(false);
+
+  // Debounce search so we don't re-filter on every keystroke
+  const debouncedSearch = useDebounced(search, 280);
+
+  // ── Fetch ─────────────────────────────────────────────────────────────────
+  const sessionId = localStorage.getItem("session_id");
+
+  const fetchFigures = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    setGridVisible(false);
+
+    try {
+      const result = await getFigures(sessionId);
+      setFigures(result.figures);
+      // Slight delay before fade-in so skeleton unmounts cleanly
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => setGridVisible(true));
+      });
+    } catch (err) {
+      setError(err.message ?? "Failed to load figures.");
+    } finally {
+      setLoading(false);
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
+    fetchFigures();
+  }, [fetchFigures]);
+
+  // ── Filter + sort ─────────────────────────────────────────────────────────
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = debouncedSearch.trim().toLowerCase();
 
     return figures
       .filter((f) => {
@@ -82,14 +78,38 @@ export default function FigureExplorer({ onExplain, onGoToPDF }) {
 
         const matchesSearch =
           !q ||
-          f.caption.toLowerCase().includes(q) ||
-          String(f.page).includes(q);
+          (f.caption ?? "").toLowerCase().includes(q) ||
+          String(f.id ?? "").toLowerCase().includes(q) ||
+          String(f.page ?? "").includes(q);
 
         return matchesFilter && matchesSearch;
       })
-      .sort((a, b) => sortAsc ? a.page - b.page : b.page - a.page);
-  }, [figures, search, filter, sortAsc]);
+      .sort((a, b) =>
+        sortAsc ? (a.page ?? 0) - (b.page ?? 0) : (b.page ?? 0) - (a.page ?? 0)
+      );
+  }, [figures, debouncedSearch, filter, sortAsc]);
 
+  // ── Keyboard navigation (← →) in modal ───────────────────────────────────
+  useEffect(() => {
+    if (!selectedFig) return;
+
+    function handleKey(e) {
+      if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+        const idx = filtered.findIndex((f) => f.id === selectedFig.id);
+        if (idx === -1) return;
+        const next =
+          e.key === "ArrowRight"
+            ? filtered[idx + 1]
+            : filtered[idx - 1];
+        if (next) setSelectedFig(next);
+      }
+    }
+
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [selectedFig, filtered]);
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
   function handleExplain(id) {
     onExplain?.(id);
     setSelectedFig(null);
@@ -100,6 +120,12 @@ export default function FigureExplorer({ onExplain, onGoToPDF }) {
     setSelectedFig(null);
   }
 
+  // ── Derived modal nav state ───────────────────────────────────────────────
+  const selectedIdx   = selectedFig ? filtered.findIndex((f) => f.id === selectedFig.id) : -1;
+  const hasPrev       = selectedIdx > 0;
+  const hasNext       = selectedIdx !== -1 && selectedIdx < filtered.length - 1;
+
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="fig-explorer">
       {/* Toolbar */}
@@ -109,19 +135,37 @@ export default function FigureExplorer({ onExplain, onGoToPDF }) {
         filter={filter}
         onFilter={setFilter}
         onSort={() => setSortAsc((v) => !v)}
+        sortAsc={sortAsc}
+        resultCount={loading ? null : filtered.length}
+        totalCount={loading ? null : figures.length}
       />
 
       {/* Grid area */}
       <div className="fig-grid-area">
-        {isLoading ? (
-          // Skeleton placeholders
+
+        {/* ── Loading ── */}
+        {loading && (
           <div className="fig-grid">
             {Array.from({ length: SKELETON_COUNT }).map((_, i) => (
-              <FigureSkeleton key={i} />
+              <FigureSkeleton key={i} index={i} />
             ))}
           </div>
-        ) : filtered.length === 0 ? (
-          // Empty state
+        )}
+
+        {/* ── Error ── */}
+        {!loading && error && (
+          <div className="fig-error-state">
+            <span className="fig-error-icon">⚠</span>
+            <p className="fig-error-title">Failed to load figures</p>
+            <p className="fig-error-msg">{error}</p>
+            <button className="fig-retry-btn" onClick={fetchFigures}>
+              ↺ Retry
+            </button>
+          </div>
+        )}
+
+        {/* ── Empty ── */}
+        {!loading && !error && filtered.length === 0 && (
           <div className="fig-empty">
             <span className="fig-empty-icon">◫</span>
             <p className="fig-empty-title">
@@ -134,16 +178,33 @@ export default function FigureExplorer({ onExplain, onGoToPDF }) {
                 ? "Figures will appear here once extracted."
                 : "Try adjusting your search or filter."}
             </p>
+            {figures.length > 0 && (
+              <button
+                className="fig-retry-btn fig-retry-btn--soft"
+                onClick={() => { setSearch(""); setFilter("all"); }}
+              >
+                × Clear filters
+              </button>
+            )}
           </div>
-        ) : (
-          // Figure grid
-          <div className="fig-grid">
-            {filtered.map((fig) => (
+        )}
+
+        {/* ── Grid ── */}
+        {!loading && !error && filtered.length > 0 && (
+          <div
+            className="fig-grid"
+            style={{
+              opacity: gridVisible ? 1 : 0,
+              transition: "opacity 300ms ease",
+            }}
+          >
+            {filtered.map((fig, i) => (
               <FigureCard
                 key={fig.id}
                 figure={fig}
                 onClick={setSelectedFig}
                 onExplain={handleExplain}
+                animationIndex={i}
               />
             ))}
           </div>
@@ -157,6 +218,10 @@ export default function FigureExplorer({ onExplain, onGoToPDF }) {
           onClose={() => setSelectedFig(null)}
           onExplain={handleExplain}
           onGoToPDF={handleGoToPDF}
+          onPrev={hasPrev ? () => setSelectedFig(filtered[selectedIdx - 1]) : null}
+          onNext={hasNext ? () => setSelectedFig(filtered[selectedIdx + 1]) : null}
+          currentIndex={selectedIdx}
+          totalCount={filtered.length}
         />
       )}
     </div>
