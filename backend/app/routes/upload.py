@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 UPLOAD_DIR = Path("uploaded_papers")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+FIGURES_DIR = Path("static/figures")
+FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+
 ALLOWED_CONTENT_TYPES = {"application/pdf"}
 MAX_FILE_SIZE_MB = 20
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
@@ -44,6 +47,18 @@ def clear_old_pdfs():
             os.remove(f)
         except Exception as e:
             logger.warning("Failed to delete %s: %s", f, e)
+
+
+def clear_old_figures() -> None:
+    """Delete previously extracted figure images for the next uploaded paper."""
+    files = glob.glob(str(FIGURES_DIR / "*"))
+    for f in files:
+        try:
+            file_path = Path(f)
+            if file_path.is_file():
+                file_path.unlink()
+        except Exception as e:
+            logger.warning("Failed to delete figure file %s: %s", f, e)
 
 
 
@@ -72,9 +87,6 @@ def _validate_pdf(file: UploadFile, content: bytes) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="File content does not appear to be a valid PDF.",
         )
-
-# --- CLEAN OLD STATE ---
-clear_old_pdfs()
 
 def _safe_filename(original: str) -> str:
     """
@@ -119,6 +131,11 @@ async def upload_pdf(file: UploadFile = File(...),session_id: str | None = None)
         ) from exc
 
     _validate_pdf(file, content)
+
+    # --- 1.5 Clean previous upload artifacts -------------------------------
+    # Single-active-paper behavior: remove old PDF and stale extracted figures.
+    clear_old_pdfs()
+    clear_old_figures()
 
     # --- 2. Persist to disk ------------------------------------------------
     safe_name = _safe_filename(file.filename or "paper")

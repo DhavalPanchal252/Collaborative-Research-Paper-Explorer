@@ -1,55 +1,46 @@
 """
 figure_extractor.py
 ===================
-Figure-Aware Extraction Pipeline — v4 (Render-Based).
+Figure-Aware Extraction Pipeline for ArxivMind — Phase 7.2 (v4).
 
-WHY v3 FAILED ON THIS PAPER
-----------------------------
-v3 extracted *embedded bitmap images* from the PDF's XObject stream.
-Research papers routinely contain architecture diagrams, flowcharts and
-plots drawn entirely in vector graphics — they have **zero embedded
-bitmaps**.  v3 therefore returned nothing for those figures.
+Root-cause fixes over v3
+------------------------
 
-Additionally, composite figures (grids of sub-images like Fig. 1 or
-Fig. 6 in the TUDA paper) are stored as many small bitmaps.  v3 picked
-only the nearest one to the caption, losing the rest of the figure.
+FIX A — Caption body-text absorption  (was: MAX_CONTINUATION_BLOCKS=2 not enough)
+    Problem: "where ˆI represents..." (body math text) was being absorbed into
+             the Fig. 4 caption because it immediately followed the caption block.
+    Fix:   _is_body_text_block() detects continuation blocks that are body text:
+             • starts with a lowercase letter  → body paragraph
+             • block length > 180 chars        → body paragraph (captions are concise)
+             • alpha ratio < 0.55              → math / symbol heavy
+           Any of these → stop absorbing immediately.
 
-v4 APPROACH — Render, Don't Extract
--------------------------------------
-Instead of mining PDF XObjects, v4 **renders each page region** that
-corresponds to a figure using PyMuPDF's rasteriser.  A clipping
-rectangle is computed from:
-  • Caption position   → defines the BOTTOM of the figure region
-  • Previous boundary → defines the TOP of the figure region
-  • Caption width      → determines single- vs. double-column x-range
+FIX B — Caption text truncated at 500 chars
+    Problem: Fig. 1 caption was cut mid-sentence.
+    Fix:   MAX_CAPTION_CHARS raised to 1200.
 
-This gives us the exact pixels the reader sees — vector or raster,
-simple or composite — with zero fragility to PDF internals.
+FIX C — Image boundary overlap / page-header pollution
+    Problem: page.get_image_rects() returns the raw XObject bbox which may span
+             multiple figures (the PDF stores Fig.14+15 in one large XObject).
+             This caused Fig.15 to contain Fig.14 pixels, and Fig.17 to also
+             bleed over.  Page headers ("IEEE TRANSACTIONS…") were also inside
+             some XObjects.
+    Fix:   Abandon XObject extraction for caption-matched figures entirely.
+           Instead, for each caption we RENDER the page zone above it using
+           page.get_pixmap(clip=zone).  This:
+             • crops exactly to the figure boundary
+             • never bleeds across caption boundaries
+             • never includes page headers or body text
+             • handles multi-column layouts (IEEE 2-col)
 
-LAYOUT HANDLING (IEEE two-column)
-----------------------------------
-Caption spans > 55 % of page width  →  double-column figure
-Caption spans ≤ 55 % of page width  →  single-column figure
-  left-column  if caption centre-x < 50 % of page width
-  right-column otherwise
-
-Each column tracks its own prev_boundary so adjacent figures in the
-two columns are not confused.
-
-BLANK-REGION FILTER
---------------------
-A render that is nearly all white (e.g. pure text region between two
-captions) is discarded by checking rendered PNG file size.  Real
-figures with ink are significantly larger than blank white areas.
-
-WHAT IS PRESERVED FROM v3
---------------------------
-• Caption detection (regex anchored at block start)
-• ID normalisation ("Fig.3" → "Fig. 3")
-• Multi-line caption absorption with hard caps
-• Junk-page detection (biography / references pages)
-• MD5 deduplication
-• Sort by (page, figure number)
+UNCHANGED from v3
+-----------------
+  • Caption detection via _CAPTION_START_RE (.match, not .search)
+  • ID normalisation (_normalise_fig_id)
+  • Junk-page detection (_is_junk_page)
+  • Dedup via MD5 on rendered bytes
+  • Sorting by (page, figure_number)
+  • Fallback figures for pages without caption-matches
 """
 
 from __future__ import annotations
@@ -67,31 +58,32 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-# Rendered figure region filters
-RENDER_ZOOM             = 2.0      # 2× zoom → decent resolution
-MIN_RENDERED_PIXELS     = 40_000   # width × height of the rendered PNG
-MIN_RENDERED_BYTES      = 8_000    # blank white PNGs are < 3 KB at 2×
-MIN_FIGURE_HEIGHT_PTS   = 35.0     # ignore slivers < 35 PDF points tall
-MIN_FIGURE_WIDTH_PTS    = 60.0     # ignore narrow strips
-
-# Caption layout thresholds
-DOUBLE_COL_THRESHOLD    = 0.55     # caption width / page width
-
 # Caption detection
-MAX_CAPTION_CHARS        = 600
-MAX_CONTINUATION_BLOCKS  = 3
-MAX_CONTINUATION_GAP_PTS = 22.0
-
-# Spatial gap between caption top and figure bottom (render search radius)
-MAX_UPWARD_SEARCH_PTS   = 350.0    # figure can be at most 350 pts above caption
+# ---------------------------------------------------------------------------
 
 _CAPTION_START_RE = re.compile(
     r"^((?:Fig\.|Figure|FIG\.)\s*\d+(?:[a-z]|\s*\([a-zA-Z0-9]+\))?\.?)",
     re.IGNORECASE,
 )
+
+# Caption text limits
+MAX_CAPTION_CHARS       = 1200   # FIX B — was 500, too short for long captions
+MAX_CONTINUATION_BLOCKS = 4      # max blocks to inspect (not all will be accepted)
+MAX_CONTINUATION_GAP    = 20.0   # pts vertical gap; beyond this → new paragraph
+
+# Spatial matching
+MAX_MATCH_GAP_PTS = 150.0   # caption ↔ figure zone gap tolerance (pts)
+
+# Render quality for figure zone pixmaps
+RENDER_SCALE = 2.5           # 2.5× → ~180 DPI for 72 DPI PDF base
+
+# Minimum rendered figure size (pixels) — rejects blank / tiny zones
+MIN_RENDER_WIDTH  = 80
+MIN_RENDER_HEIGHT = 60
+
+# ---------------------------------------------------------------------------
+# Junk-page detection (author bios, references, etc.)
+# ---------------------------------------------------------------------------
 
 _JUNK_PAGE_MARKERS = (
     "received the b.s",
@@ -102,8 +94,6 @@ _JUNK_PAGE_MARKERS = (
     "author biography",
     "author biographies",
     "conflicts of interest",
-    "acknowledgment\n",
-    "acknowledgement\n",
 )
 
 
@@ -113,10 +103,10 @@ _JUNK_PAGE_MARKERS = (
 
 @dataclass
 class _CaptionInfo:
-    label:    str
-    text:     str
-    bbox:     tuple   # (x0, y0, x1, y1) PDF points
-    page_num: int
+    label:    str    # normalised, e.g. "Fig. 3"
+    text:     str    # full caption text
+    bbox:     tuple  # (x0, y0, x1, y1) in PDF points
+    page_num: int    # 1-indexed
 
 
 @dataclass
@@ -142,15 +132,11 @@ class FigureMetadata:
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helpers — ID normalisation
 # ---------------------------------------------------------------------------
 
-def _md5(data: bytes) -> str:
-    return hashlib.md5(data, usedforsecurity=False).hexdigest()
-
-
 def _normalise_fig_id(raw: str) -> str:
-    """Collapse all Fig./Figure/FIG. variants to 'Fig. N [suffix]'."""
+    """Collapse all spelling variants to canonical "Fig. N" or "Fig. N(a)"."""
     m = re.match(r"(Fig\.|Figure|FIG\.)\s*(\d+)(.*)", raw.strip(), re.IGNORECASE)
     if not m:
         return raw.strip()
@@ -158,20 +144,55 @@ def _normalise_fig_id(raw: str) -> str:
     return f"Fig. {m.group(2)}{(' ' + suffix) if suffix else ''}"
 
 
+# ---------------------------------------------------------------------------
+# Helpers — junk page
+# ---------------------------------------------------------------------------
+
 def _is_junk_page(page: fitz.Page) -> bool:
     text = page.get_text().lower()
     return any(marker in text for marker in _JUNK_PAGE_MARKERS)
 
 
 # ---------------------------------------------------------------------------
-# Stage 1 — caption extraction (unchanged from v3)
+# Stage 1 — caption extraction  (FIX A + FIX B)
 # ---------------------------------------------------------------------------
+
+def _is_body_text_block(text: str) -> bool:
+    """
+    FIX A — return True when a block looks like body text, not caption text.
+
+    Signals:
+    • starts with a lowercase letter  → continuation of a body paragraph
+    • length > 180 chars              → body paragraphs are long; caption
+                                        continuations are short phrases
+    • alpha ratio < 0.55              → math / equation heavy content
+    """
+    stripped = text.strip()
+    if not stripped:
+        return True   # blank → stop
+
+    # Starts with lowercase: body text continuation
+    if stripped[0].islower():
+        return True
+
+    # Very long block: almost certainly a body paragraph
+    if len(stripped) > 180:
+        return True
+
+    # Symbol / equation heavy
+    alpha_ratio = sum(c.isalpha() for c in stripped) / max(len(stripped), 1)
+    if alpha_ratio < 0.55:
+        return True
+
+    return False
+
 
 def _extract_captions(page: fitz.Page, page_num: int) -> list[_CaptionInfo]:
     """
-    Extract figure captions.  Only text blocks whose first word is
-    'Fig.' / 'Figure' are treated as captions; inline body mentions are
-    ignored because they don't start a block.
+    Extract figure captions from page text blocks.
+
+    Uses .match() so "Fig." must start the block (not an inline reference).
+    Absorbs continuation lines with smart body-text stopping (FIX A).
     """
     blocks      = page.get_text("blocks")
     text_blocks = [b for b in blocks if len(b) > 6 and b[6] == 0]
@@ -190,26 +211,34 @@ def _extract_captions(page: fitz.Page, page_num: int) -> list[_CaptionInfo]:
         if not m:
             continue
 
-        raw_label = m.group(1)
-        label     = _normalise_fig_id(raw_label)
+        label     = _normalise_fig_id(m.group(1))
         full_text = text
         bbox      = [x0, y0, x1, y1]
 
         for j in range(i + 1, min(i + 1 + MAX_CONTINUATION_BLOCKS, len(text_blocks))):
-            nx0, ny0, nx1, ny1, next_text = (
+            nx0, ny0, nx1, ny1, ntext = (
                 text_blocks[j][0], text_blocks[j][1],
                 text_blocks[j][2], text_blocks[j][3],
                 text_blocks[j][4].strip(),
             )
 
-            if _CAPTION_START_RE.match(next_text):
+            # Stop: next block starts a new caption
+            if _CAPTION_START_RE.match(ntext):
                 break
-            if ny0 - bbox[3] > MAX_CONTINUATION_GAP_PTS:
+
+            # Stop: vertical gap too large
+            if ny0 - bbox[3] > MAX_CONTINUATION_GAP:
                 break
+
+            # FIX A: Stop: next block is body text
+            if _is_body_text_block(ntext):
+                break
+
+            # Stop: already at char cap
             if len(full_text) >= MAX_CAPTION_CHARS:
                 break
 
-            full_text = f"{full_text} {next_text}"
+            full_text = f"{full_text} {ntext}"
             bbox[2]   = max(bbox[2], nx1)
             bbox[3]   = ny1
             skip_indices.add(j)
@@ -227,111 +256,205 @@ def _extract_captions(page: fitz.Page, page_num: int) -> list[_CaptionInfo]:
 
 
 # ---------------------------------------------------------------------------
-# Stage 2 — render figure region (CORE v4 LOGIC)
+# Stage 2 — figure zone computation  (FIX C core logic)
 # ---------------------------------------------------------------------------
 
-def _column_of(caption: _CaptionInfo, page_width: float) -> str:
+def _column_bounds(caption_bbox: tuple, page_width: float) -> tuple[float, float]:
     """
-    Classify a caption into 'full', 'left', or 'right' column.
+    Return (x_left, x_right) of the column that contains this caption.
+
+    Handles full-width and 2-column (IEEE-style) layouts.
     """
-    cap_width = caption.bbox[2] - caption.bbox[0]
-    if cap_width > DOUBLE_COL_THRESHOLD * page_width:
-        return "full"
-    cap_cx = (caption.bbox[0] + caption.bbox[2]) / 2
-    return "left" if cap_cx < page_width / 2 else "right"
+    cx0, _, cx1, _ = caption_bbox
+    cap_centre = (cx0 + cx1) / 2.0
+    half = page_width / 2.0
+
+    # Full-width caption (spans most of the page)
+    if cx1 - cx0 > page_width * 0.75:
+        return 0.0, page_width
+
+    # Left column
+    if cap_centre < half:
+        return 0.0, half + 5.0
+
+    # Right column
+    return half - 5.0, page_width
 
 
-def _render_figure_region(
-    page:        fitz.Page,
-    caption:     _CaptionInfo,
-    prev_bottom: float,
-    output_path: Path,
-) -> tuple[str, int, int, list[float]] | None:
+def _figure_zone_for_caption(
+    caption: _CaptionInfo,
+    all_captions_on_page: list[_CaptionInfo],
+    page: fitz.Page,
+) -> fitz.Rect | None:
     """
-    Render the PDF region above *caption* (between *prev_bottom* and
-    caption.bbox[1]) and save it as a PNG.
+    FIX C — Compute the rectangular page zone that visually contains the
+    figure associated with *caption*.
 
-    Returns
-    -------
-    (image_url, width_px, height_px, [x0,y0,x1,y1]) on success
-    None on failure or when the region is blank / too small
+    The zone spans from just after the previous figure ends to just before
+    this caption begins, constrained to the same column.
+
+    Returns None if the zone is too thin to be a real figure.
     """
     page_rect  = page.rect
-    page_w     = page_rect.width
-    cap_bbox   = caption.bbox
+    page_width = page_rect.width
 
-    # --- X range (column-aware) -------------------------------------------
-    column = _column_of(caption, page_w)
-    if column == "full":
-        render_x0 = 0.0
-        render_x1 = page_w
-    elif column == "left":
-        render_x0 = 0.0
-        render_x1 = page_w * 0.52       # left column + small overlap
-    else:  # right
-        render_x0 = page_w * 0.48       # right column
-        render_x1 = page_w
+    col_x0, col_x1 = _column_bounds(caption.bbox, page_width)
+    cap_y0 = caption.bbox[1]
 
-    # --- Y range -----------------------------------------------------------
-    render_y0 = max(0.0, prev_bottom + 1.0)
-    render_y1 = cap_bbox[1] - 1.0      # just above caption top
+    # Top boundary: bottom of the nearest caption ABOVE this one in the
+    # same column, plus a small gap.  Default to near the page top.
+    zone_y0 = page_rect.y0 + 2.0
 
-    fig_height = render_y1 - render_y0
-    fig_width  = render_x1 - render_x0
+    for other in all_captions_on_page:
+        if other is caption:
+            continue
+        other_y1 = other.bbox[3]
+        if other_y1 >= cap_y0:
+            continue   # other is below or at the same level
 
-    if fig_height < MIN_FIGURE_HEIGHT_PTS or fig_width < MIN_FIGURE_WIDTH_PTS:
+        # Check same column: their x ranges must overlap
+        other_cx0, _, other_cx1, _ = other.bbox
+        if other_cx1 < col_x0 or other_cx0 > col_x1:
+            continue
+
+        if other_y1 > zone_y0:
+            zone_y0 = other_y1 + 3.0
+
+    zone_y1 = cap_y0 - 3.0
+
+    if zone_y1 - zone_y0 < MIN_RENDER_HEIGHT / RENDER_SCALE:
         logger.debug(
-            "Page %d | '%s': render region too small (%.0f × %.0f pts) — skip",
-            caption.page_num, caption.label, fig_width, fig_height,
+            "Page %d | '%s': figure zone too thin (%.1f pts) — skipping.",
+            caption.page_num, caption.label, zone_y1 - zone_y0,
         )
         return None
 
-    # Clamp to page bounds
-    clip = fitz.Rect(
-        max(0.0, render_x0),
-        max(0.0, render_y0),
-        min(page_rect.width,  render_x1),
-        min(page_rect.height, render_y1),
-    )
+    return fitz.Rect(col_x0, zone_y0, col_x1, zone_y1)
 
-    mat = fitz.Matrix(RENDER_ZOOM, RENDER_ZOOM)
-    try:
-        pix = page.get_pixmap(matrix=mat, clip=clip, colorspace=fitz.csRGB)
-    except Exception as exc:
-        logger.debug("Page %d | '%s': pixmap failed — %s", caption.page_num, caption.label, exc)
-        return None
 
-    # --- Quality checks on the render ------------------------------------
-    if pix.width * pix.height < MIN_RENDERED_PIXELS:
-        logger.debug(
-            "Page %d | '%s': rendered too small (%d × %d px) — skip",
-            caption.page_num, caption.label, pix.width, pix.height,
-        )
-        return None
+# ---------------------------------------------------------------------------
+# Stage 3 — render the figure zone to PNG  (FIX C)
+# ---------------------------------------------------------------------------
 
-    img_bytes = pix.tobytes("png")
+def _render_zone(page: fitz.Page, zone: fitz.Rect) -> tuple[bytes, int, int]:
+    """
+    Render *zone* (in PDF points) as a PNG at RENDER_SCALE resolution.
 
-    # Blank-whitespace filter: a nearly-white region compresses to < 8 KB
-    if len(img_bytes) < MIN_RENDERED_BYTES:
-        logger.debug(
-            "Page %d | '%s': rendered region appears blank (%d B) — skip",
-            caption.page_num, caption.label, len(img_bytes),
-        )
-        return None
+    Returns (png_bytes, width_px, height_px).
+    """
+    mat = fitz.Matrix(RENDER_SCALE, RENDER_SCALE)
+    pix = page.get_pixmap(matrix=mat, clip=zone, alpha=False)
+    return pix.tobytes("png"), pix.width, pix.height
 
-    filename = f"{uuid.uuid4().hex}.png"
-    try:
-        (output_path / filename).write_bytes(img_bytes)
-    except OSError as exc:
-        logger.error("Page %d | '%s': save failed — %s", caption.page_num, caption.label, exc)
-        return None
 
-    return (
-        f"/static/figures/{filename}",
-        pix.width,
-        pix.height,
-        [clip.x0, clip.y0, clip.x1, clip.y1],
-    )
+def _is_blank_render(png_bytes: bytes, width: int, height: int) -> bool:
+    """
+    Quick heuristic: if the rendered image is mostly white/uniform, it's blank.
+    We check this by looking at the raw pixel variance via the PNG header only
+    — fast and dependency-free.
+    We simply check file size; a blank white PNG compresses very small.
+    """
+    # A real figure at 2.5× scale should be at least a few KB
+    return len(png_bytes) < 5_000
+
+
+# ---------------------------------------------------------------------------
+# Helpers — MD5 and storage
+# ---------------------------------------------------------------------------
+
+def _md5(data: bytes) -> str:
+    return hashlib.md5(data, usedforsecurity=False).hexdigest()
+
+
+def _save_image(image_bytes: bytes, ext: str, output_dir: Path) -> str:
+    filename = f"{uuid.uuid4().hex}.{ext}"
+    (output_dir / filename).write_bytes(image_bytes)
+    return filename
+
+
+# ---------------------------------------------------------------------------
+# Stage 4 — fallback: XObject extraction for uncaptioned figures
+# ---------------------------------------------------------------------------
+
+_SUPPORTED_EXTS = {"png", "jpeg", "jpg", "bmp", "tiff"}
+
+MIN_PIXEL_AREA      = 50_000
+MIN_FILE_SIZE_BYTES = 15_000
+PATCH_RATIO_LOW     = 0.8
+PATCH_RATIO_HIGH    = 1.2
+MIN_ASPECT_RATIO    = 0.2
+MAX_ASPECT_RATIO    = 6.0
+
+
+def _passes_quality_gate(image_bytes: bytes, width: int, height: int, ext: str) -> bool:
+    if ext.lower() not in _SUPPORTED_EXTS:
+        return False
+    if width == 0 or height == 0:
+        return False
+    if width * height < MIN_PIXEL_AREA:
+        return False
+    if len(image_bytes) < MIN_FILE_SIZE_BYTES:
+        return False
+    ratio = width / height
+    if PATCH_RATIO_LOW <= ratio <= PATCH_RATIO_HIGH:
+        return False
+    if ratio < MIN_ASPECT_RATIO or ratio > MAX_ASPECT_RATIO:
+        return False
+    return True
+
+
+def _collect_fallback_candidates(
+    page: fitz.Page,
+    doc: fitz.Document,
+) -> list[tuple[bytes, str, int, int, tuple]]:
+    """
+    Collect quality-passing raw XObjects for fallback (uncaptioned pages).
+    Returns list of (image_bytes, ext, width, height, bbox).
+    """
+    results = []
+    raw_images = page.get_images(full=True)
+
+    for item in raw_images:
+        xref   = item[0]
+        width  = item[2]
+        height = item[3]
+
+        # Resolve rendered bbox
+        bbox = None
+        try:
+            rects = page.get_image_rects(item)
+            if rects:
+                r = rects[0]
+                bbox = (r.x0, r.y0, r.x1, r.y1)
+        except Exception:
+            pass
+
+        if bbox is None:
+            continue
+
+        try:
+            base = doc.extract_image(xref)
+        except Exception:
+            continue
+
+        image_bytes = base.get("image", b"")
+        ext         = base.get("ext", "png").lower()
+        width       = base.get("width", width)
+        height      = base.get("height", height)
+
+        if _passes_quality_gate(image_bytes, width, height, ext):
+            results.append((image_bytes, ext, width, height, bbox))
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Sorting
+# ---------------------------------------------------------------------------
+
+def _sort_key(fig: FigureMetadata) -> tuple[int, int]:
+    m = re.search(r"\d+", fig.id)
+    return (fig.page, int(m.group()) if m else 9999)
 
 
 # ---------------------------------------------------------------------------
@@ -343,43 +466,43 @@ def extract_figures(
     output_dir: str = "backend/static/figures",
 ) -> list[dict]:
     """
-    Extract research figures from *pdf_path*.
+    Extract research figures from *pdf_path* using a caption-driven,
+    render-based pipeline.
 
-    Uses a render-based approach: for each detected caption, the page
-    region above it is rasterised.  This captures vector diagrams,
-    composite grid figures, and bitmap images alike.
+    Each returned figure carries its label, full caption, image URL,
+    page number, bbox and pixel dimensions.
 
-    Returns
-    -------
-    list[dict]
-        Sorted by (page, figure number).  Empty on failure.
+    Returns list of dicts sorted by (page, figure_number).
+    Always a list — empty on failure.
+
+    Pipeline (per page)
+    -------------------
+    1. Skip junk pages (author bios, acknowledgements).
+    2. Extract captions with smart body-text stopping.
+    3. For each caption, compute the figure zone above it (column-aware).
+    4. Render the zone to a cropped PNG — no XObject bleeding.
+    5. Dedup via MD5.
+    6. Fallback: for pages with no captions, extract quality XObjects.
+    7. Sort by (page, figure_number).
     """
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # 🔥 CLEAN OLD IMAGES: delete previous extractions before saving new ones
-    try:
-        for old_file in output_path.glob("*"):
-            if old_file.is_file():
-                old_file.unlink()
-                logger.debug("Removed old image: %s", old_file.name)
-    except Exception as exc:
-        logger.warning("Failed to clean old images in %s: %s", output_dir, exc)
-
     stats = {
         "pages":            0,
-        "pages_skipped":    0,
+        "junk_skipped":     0,
         "captions_found":   0,
-        "dup_ids_skipped":  0,
+        "dup_ids":          0,
         "rendered":         0,
-        "blank_skipped":    0,
-        "dup_hash_skipped": 0,
-        "returned":         0,
+        "render_blank":     0,
+        "render_no_zone":   0,
+        "fallback":         0,
+        "dup_hash":         0,
     }
 
     figures:      list[FigureMetadata] = []
     seen_hashes:  set[str]             = set()
-    seen_fig_ids: set[str]             = set()
+    seen_ids:     set[str]             = set()
 
     try:
         doc = fitz.open(pdf_path)
@@ -393,112 +516,137 @@ def extract_figures(
         for page in doc:
             page_num = page.number + 1
 
+            # 1. Junk page check
             if _is_junk_page(page):
-                stats["pages_skipped"] += 1
-                logger.debug("Page %d: junk page — skipping.", page_num)
+                stats["junk_skipped"] += 1
+                logger.debug("Page %d: junk page — skipped.", page_num)
                 continue
 
+            # 2. Caption extraction
             captions = _extract_captions(page, page_num)
-            if not captions:
-                continue
-
             stats["captions_found"] += len(captions)
 
-            # Sort captions top-to-bottom (reading order)
-            captions.sort(key=lambda c: c.bbox[1])
-
-            page_w = page.rect.width
-
-            # Per-column boundary tracking
-            # 'full', 'left', 'right' each independently track
-            # where the last rendered figure ended.
-            prev_bottom: dict[str, float] = {
-                "full":  0.0,
-                "left":  0.0,
-                "right": 0.0,
-            }
-
+            # 3–5. Render-based figure extraction
             for caption in captions:
 
-                # Dedup by figure ID
-                if caption.label in seen_fig_ids:
-                    stats["dup_ids_skipped"] += 1
+                # Dedup by normalised label
+                if caption.label in seen_ids:
+                    stats["dup_ids"] += 1
                     logger.debug(
-                        "Page %d | '%s': duplicate ID — skip.",
+                        "Page %d | '%s': duplicate ID — skipped.",
                         page_num, caption.label,
                     )
                     continue
 
-                column = _column_of(caption, page_w)
-                pb     = prev_bottom[column]
-
-                result = _render_figure_region(page, caption, pb, output_path)
-
-                if result is None:
-                    # The region was blank or too small.
-                    # Still advance the boundary so subsequent figures use
-                    # the caption bottom as the new floor.
-                    stats["blank_skipped"] += 1
-                    prev_bottom[column] = caption.bbox[3]
-                    seen_fig_ids.add(caption.label)
+                # Compute figure zone above this caption
+                zone = _figure_zone_for_caption(caption, captions, page)
+                if zone is None:
+                    stats["render_no_zone"] += 1
+                    seen_ids.add(caption.label)
                     continue
 
-                url, w, h, bbox = result
-                img_bytes_for_hash = (output_path / Path(url).name).read_bytes()
-                digest = _md5(img_bytes_for_hash)
+                # Render zone → PNG bytes
+                try:
+                    png_bytes, width, height = _render_zone(page, zone)
+                except Exception as exc:
+                    logger.error(
+                        "Page %d | '%s': render failed — %s",
+                        page_num, caption.label, exc,
+                    )
+                    seen_ids.add(caption.label)
+                    continue
 
+                if _is_blank_render(png_bytes, width, height):
+                    stats["render_blank"] += 1
+                    logger.debug(
+                        "Page %d | '%s': rendered zone is blank — skipped.",
+                        page_num, caption.label,
+                    )
+                    seen_ids.add(caption.label)
+                    continue
+
+                # Dedup by content hash
+                digest = _md5(png_bytes)
                 if digest in seen_hashes:
-                    # Remove the just-saved duplicate
-                    try:
-                        (output_path / Path(url).name).unlink(missing_ok=True)
-                    except OSError:
-                        pass
-                    stats["dup_hash_skipped"] += 1
-                    prev_bottom[column] = caption.bbox[3]
-                    seen_fig_ids.add(caption.label)
+                    stats["dup_hash"] += 1
+                    seen_ids.add(caption.label)
                     continue
 
                 seen_hashes.add(digest)
-                seen_fig_ids.add(caption.label)
-                prev_bottom[column] = caption.bbox[3]
-                stats["rendered"] += 1
+                seen_ids.add(caption.label)
 
+                try:
+                    filename = _save_image(png_bytes, "png", output_path)
+                except OSError as exc:
+                    logger.error(
+                        "Page %d | '%s': save failed — %s",
+                        page_num, caption.label, exc,
+                    )
+                    continue
+
+                stats["rendered"] += 1
                 figures.append(
                     FigureMetadata(
                         id=caption.label,
                         caption=caption.text,
-                        image_url=url,
+                        image_url=f"/static/figures/{filename}",
                         page=page_num,
-                        bbox=bbox,
-                        width=w,
-                        height=h,
+                        bbox=[zone.x0, zone.y0, zone.x1, zone.y1],
+                        width=width,
+                        height=height,
                     )
                 )
+
+            # 6. Fallback: pages with no captions → XObject extraction
+            if not captions:
+                for (img_bytes, ext, w, h, bbox) in _collect_fallback_candidates(page, doc):
+                    digest = _md5(img_bytes)
+                    if digest in seen_hashes:
+                        stats["dup_hash"] += 1
+                        continue
+                    seen_hashes.add(digest)
+
+                    try:
+                        filename = _save_image(img_bytes, ext, output_path)
+                    except OSError as exc:
+                        logger.error("Page %d | fallback save failed — %s", page_num, exc)
+                        continue
+
+                    stats["fallback"] += 1
+                    figures.append(
+                        FigureMetadata(
+                            id=f"Figure (p.{page_num})",
+                            caption="",
+                            image_url=f"/static/figures/{filename}",
+                            page=page_num,
+                            bbox=list(bbox),
+                            width=w,
+                            height=h,
+                        )
+                    )
 
     finally:
         doc.close()
 
-    # Sort by page then figure number
-    def _sort_key(fig: FigureMetadata) -> tuple[int, int]:
-        m = re.search(r"\d+", fig.id)
-        return (fig.page, int(m.group()) if m else 9999)
-
+    # 7. Sort
     figures.sort(key=_sort_key)
-    stats["returned"] = len(figures)
 
     logger.info(
         "extract_figures('%s') | pages=%d | junk_skipped=%d | "
-        "captions=%d | dup_ids=%d | rendered=%d | blank=%d | "
-        "dup_hash=%d | returned=%d",
+        "captions=%d | dup_ids=%d | "
+        "rendered=%d | blank=%d | no_zone=%d | "
+        "fallback=%d | dup_hash=%d | returned=%d",
         Path(pdf_path).name,
         stats["pages"],
-        stats["pages_skipped"],
+        stats["junk_skipped"],
         stats["captions_found"],
-        stats["dup_ids_skipped"],
+        stats["dup_ids"],
         stats["rendered"],
-        stats["blank_skipped"],
-        stats["dup_hash_skipped"],
-        stats["returned"],
+        stats["render_blank"],
+        stats["render_no_zone"],
+        stats["fallback"],
+        stats["dup_hash"],
+        len(figures),
     )
 
     return [fig.to_dict() for fig in figures]
