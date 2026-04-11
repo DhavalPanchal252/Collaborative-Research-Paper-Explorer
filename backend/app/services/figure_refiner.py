@@ -95,7 +95,7 @@ _TITLE_MAX_CHARS: int = 60
 # BUG-6 FIX: Clean caption kept short for display (200 chars);
 # LLM receives raw caption up to _LLM_CAPTION_MAX_CHARS for better context.
 _CAPTION_MAX_CHARS:     int = 200
-_LLM_CAPTION_MAX_CHARS: int = 200   # full context for type/importance inference
+_LLM_CAPTION_MAX_CHARS: int = 600   # full context for type/importance inference
 
 _DESCRIPTION_MAX_CHARS: int = 300
 _CONF_MIN: float = 0.50
@@ -569,6 +569,48 @@ def _safe_enrichment(fallback: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _is_bad_batch(enrichment_map: dict[str, dict[str, Any]]) -> bool:
+    """Detect a low-quality or failed LLM batch response.
+
+    A batch is considered "bad" when at least 50 % of its items have both
+    ``type == "other"`` **and** an empty ``description``.  This pattern
+    occurs in two cases:
+
+    1. JSON parse failure — ``_parse_batch_response`` filled every slot with
+       ``_safe_enrichment()``, which sets ``type="other"`` and
+       ``description=""``.
+    2. Low-quality model output — the model returned valid JSON but gave
+       genuinely uninformative answers (no type classification, no description).
+
+    Both cases warrant a Gemini fallback attempt.
+
+    Args:
+        enrichment_map: ``{fig_id: enrichment_dict}`` returned by
+                        ``_parse_batch_response``.
+
+    Returns:
+        ``True`` when >= 50 % of items are type="other" with empty description.
+        ``False`` otherwise (including when the map is empty).
+
+    Examples:
+        >>> _is_bad_batch({"f1": {"type": "other", "description": ""}})
+        True   # 1 / 1 = 100 % ≥ 50 %
+        >>> _is_bad_batch({"f1": {"type": "graph",  "description": "Loss curves"},
+        ...                "f2": {"type": "other",  "description": ""}})
+        False  # 1 / 2 = 50 % — equal, not strictly greater; adjust threshold as needed
+    """
+    if not enrichment_map:
+        return False
+
+    bad_count = sum(
+        1
+        for enrichment in enrichment_map.values()
+        if enrichment.get("type") == "other"
+        and not (enrichment.get("description") or "").strip()
+    )
+    return bad_count / len(enrichment_map) >= 0.5
+
+
 def _validate_enrichment_item(
     item: dict[str, Any],
     fallback: dict[str, Any],
@@ -817,6 +859,7 @@ class FigureRefiner:
         self,
         batch_figures: list[dict[str, Any]],
         llm: Any,
+        fallback_llm: Any = None,
     ) -> dict[str, dict[str, Any]]:
         """Acquire the concurrency semaphore then call ``_enrich_batch``.
 
@@ -826,32 +869,44 @@ class FigureRefiner:
 
         Args:
             batch_figures: Subset of Phase 7.4.1 figures to enrich together.
-            llm:           Callable LLM instance (GroqLLM, OllamaLLM, …).
+            llm:           Primary callable LLM instance (GroqLLM, …).
+            fallback_llm:  Secondary callable LLM instance (GeminiLLM).
+                           Used when the primary call fails or returns a
+                           low-quality batch.  ``None`` disables fallback.
 
         Returns:
             ``{fig_id: enrichment_dict}`` for every figure in *batch_figures*.
         """
         async with self._get_semaphore():
-            return await self._enrich_batch(batch_figures, llm)
+            return await self._enrich_batch(
+                batch_figures, llm, fallback_llm=fallback_llm
+            )
 
     async def _enrich_batch(
         self,
         batch_figures: list[dict[str, Any]],
         llm: Any,
+        fallback_llm: Any = None,
     ) -> dict[str, dict[str, Any]]:
         """Issue ONE LLM call for the entire batch; parse and validate the response.
 
-        Features:
-          · Single LLM call replaces N per-figure calls (N = batch size)
-          · asyncio.to_thread() keeps the event loop unblocked
-          · Configurable retry with linear backoff for transient failures
-          · Hard timeout per batch (scaled up vs per-figure timeout)
-          · On total failure → safe fallbacks for every figure in the batch,
-            pipeline continues uninterrupted
+        Fallback flow (Phase 7.4.2 multi-model):
+          Step 1 — Try primary LLM (Groq):
+            · asyncio.to_thread() keeps the event loop unblocked
+            · Configurable retry with linear backoff for transient failures
+            · Hard timeout per batch
+          Step 2 — Fall back to Gemini when ANY of these occur:
+            · Exception or timeout after all retries (primary LLM unreachable)
+            · JSON parse failure (_parse_batch_response fell back to safe dummies)
+            · Low-quality output: ≥ 50 % of items have type='other' + empty desc
+              (detected by _is_bad_batch)
+          Step 3 — If Gemini also fails → return _safe_enrichment for every figure.
 
         Args:
             batch_figures: Phase 7.4.1-refined figure dicts for this batch.
-            llm:           Callable LLM instance.
+            llm:           Primary callable LLM instance (GroqLLM, …).
+            fallback_llm:  Secondary callable LLM (GeminiLLM).  Pass ``None``
+                           to disable multi-model fallback (e.g. in tests).
 
         Returns:
             ``{fig_id: enrichment_dict}`` — always one entry per input figure.
@@ -869,7 +924,11 @@ class FigureRefiner:
             batch_ids, len(prompt),
         )
 
+        # ── STEP 1: Try primary LLM (Groq) ───────────────────────────────────
+        logger.info("_enrich_batch: [Using GROQ] batch=%s", batch_ids)
+
         raw_response: str | None = None
+        primary_failed: bool     = False
 
         for attempt in range(_LLM_RETRY_ATTEMPTS):
             try:
@@ -882,66 +941,136 @@ class FigureRefiner:
                 )
 
                 logger.debug(
-                    "_enrich_batch: LLM response batch=%s (%d chars)",
+                    "_enrich_batch: GROQ response batch=%s (%d chars)",
                     batch_ids, len(raw_response or ""),
                 )
                 # Brief courtesy pause to avoid hammering rate limits
                 await asyncio.sleep(0.5)
-                break  # ── success ──────────────────────────────────────────
+                break  # ── Groq success ──────────────────────────────────────
 
             except asyncio.TimeoutError:
                 self._llm_timeouts += 1
                 if attempt < _LLM_RETRY_ATTEMPTS - 1:
                     logger.warning(
-                        "_enrich_batch: timeout (attempt %d/%d) batch=%s — retrying",
+                        "_enrich_batch: GROQ timeout (attempt %d/%d) batch=%s — retrying",
                         attempt + 1, _LLM_RETRY_ATTEMPTS, batch_ids,
                     )
                     await asyncio.sleep(0.5 * (attempt + 1))
                 else:
-                    logger.error(
-                        "_enrich_batch: timeout after %d attempts batch=%s — "
-                        "using safe fallbacks.",
+                    logger.warning(
+                        "_enrich_batch: GROQ timeout after %d attempts batch=%s — "
+                        "will attempt Gemini fallback.",
                         _LLM_RETRY_ATTEMPTS, batch_ids,
                     )
-                    self._batch_errors += 1
-                    return {
-                        f.get("id", ""): _safe_enrichment(f)
-                        for f in batch_figures
-                    }
+                    primary_failed = True
 
             except Exception as exc:  # noqa: BLE001
                 if attempt < _LLM_RETRY_ATTEMPTS - 1:
                     logger.warning(
-                        "_enrich_batch: LLM error (attempt %d/%d) batch=%s: %s — retrying",
+                        "_enrich_batch: GROQ error (attempt %d/%d) batch=%s: %s — retrying",
                         attempt + 1, _LLM_RETRY_ATTEMPTS, batch_ids, exc,
                     )
                     await asyncio.sleep(0.5 * (attempt + 1))
                 else:
-                    logger.error(
-                        "_enrich_batch: LLM failed after %d attempts batch=%s: %s — "
-                        "using safe fallbacks.",
+                    logger.warning(
+                        "_enrich_batch: GROQ failed after %d attempts batch=%s: %s — "
+                        "will attempt Gemini fallback.",
                         _LLM_RETRY_ATTEMPTS, batch_ids, exc,
                     )
-                    self._batch_errors += 1
-                    return {
-                        f.get("id", ""): _safe_enrichment(f)
-                        for f in batch_figures
-                    }
+                    primary_failed = True
 
-        if raw_response is None:
+        # ── Evaluate Groq result quality ──────────────────────────────────────
+        needs_fallback: bool = primary_failed
+
+        if not primary_failed:
+            if raw_response is None:
+                logger.warning(
+                    "_enrich_batch: GROQ returned None response for batch=%s — "
+                    "will attempt Gemini fallback.",
+                    batch_ids,
+                )
+                needs_fallback = True
+            else:
+                # Parse the response; then quality-gate it.
+                enrichment_map = _parse_batch_response(raw_response, batch_figures)
+
+                if _is_bad_batch(enrichment_map):
+                    logger.warning(
+                        "_enrich_batch: GROQ batch=%s produced low-quality output "
+                        "(>= 50%% items are type='other' with empty description) — "
+                        "will attempt Gemini fallback.",
+                        batch_ids,
+                    )
+                    needs_fallback = True
+                else:
+                    # ── Groq succeeded and quality is acceptable ───────────────
+                    for fig_id, enrichment in enrichment_map.items():
+                        logger.debug(
+                            "_enrich_batch: GROQ fig='%s' → type='%s' importance='%s' "
+                            "title='%.50s'",
+                            fig_id, enrichment["type"],
+                            enrichment["importance"], enrichment["title"],
+                        )
+                    return enrichment_map
+
+        # ── STEP 2: Fallback → Gemini ─────────────────────────────────────────
+        if fallback_llm is None:
+            # Fallback disabled (no Gemini client available)
+            logger.error(
+                "_enrich_batch: GROQ failed and no fallback LLM configured — "
+                "using safe fallbacks for batch=%s.",
+                batch_ids,
+            )
             self._batch_errors += 1
             return {f.get("id", ""): _safe_enrichment(f) for f in batch_figures}
 
-        # ── Parse + validate the JSON-array response ──────────────────────────
-        enrichment_map = _parse_batch_response(raw_response, batch_figures)
+        logger.info(
+            "_enrich_batch: [Fallback → GEMINI] batch=%s",
+            batch_ids,
+        )
 
-        for fig_id, enrichment in enrichment_map.items():
+        try:
+            gemini_response: str = await asyncio.wait_for(
+                asyncio.to_thread(fallback_llm, prompt=prompt),
+                timeout=_LLM_TIMEOUT_SECS,
+            )
+            self._llm_calls += 1
+
             logger.debug(
-                "_enrich_batch: fig='%s' → type='%s' importance='%s' title='%.50s'",
-                fig_id, enrichment["type"], enrichment["importance"], enrichment["title"],
+                "_enrich_batch: GEMINI response batch=%s (%d chars)",
+                batch_ids, len(gemini_response or ""),
+            )
+            await asyncio.sleep(0.5)
+
+            gemini_map = _parse_batch_response(gemini_response, batch_figures)
+
+            for fig_id, enrichment in gemini_map.items():
+                logger.debug(
+                    "_enrich_batch: GEMINI fig='%s' → type='%s' importance='%s' "
+                    "title='%.50s'",
+                    fig_id, enrichment["type"],
+                    enrichment["importance"], enrichment["title"],
+                )
+            return gemini_map
+
+        except asyncio.TimeoutError:
+            self._llm_timeouts += 1
+            logger.error(
+                "_enrich_batch: [Both models failed] GEMINI timed out for batch=%s — "
+                "using safe fallbacks.",
+                batch_ids,
             )
 
-        return enrichment_map
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "_enrich_batch: [Both models failed] GEMINI error for batch=%s: %s — "
+                "using safe fallbacks.",
+                batch_ids, exc,
+            )
+
+        # ── STEP 3: Both models failed ────────────────────────────────────────
+        self._batch_errors += 1
+        return {f.get("id", ""): _safe_enrichment(f) for f in batch_figures}
 
     # ------------------------------------------------------------------
     # Phase 7.4.2 — public entry point
@@ -991,6 +1120,19 @@ class FigureRefiner:
                 self._llm_model, exc,
             )
             return figures
+
+        # ── Load Gemini fallback (best-effort; pipeline continues if unavailable) ──
+        fallback_llm: Any = None
+        if self._llm_model != "gemini":
+            try:
+                fallback_llm = get_llm("gemini")
+                logger.info("enrich_with_llm: Gemini fallback LLM loaded successfully.")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "enrich_with_llm: could not load Gemini fallback LLM: %s — "
+                    "multi-model fallback disabled for this run.",
+                    exc,
+                )
 
         logger.info(
             "enrich_with_llm: starting batched enrichment for %d figures "
@@ -1043,7 +1185,10 @@ class FigureRefiner:
             # BUG-2 pattern: return_exceptions=True so one batch failure cannot
             # cancel the entire gather.
             batch_results = await asyncio.gather(
-                *[self._enrich_batch_limited(batch, llm) for batch in batches],
+                *[
+                    self._enrich_batch_limited(batch, llm, fallback_llm=fallback_llm)
+                    for batch in batches
+                ],
                 return_exceptions=True,
             )
 

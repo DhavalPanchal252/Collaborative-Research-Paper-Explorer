@@ -1,11 +1,13 @@
 # app/services/llm/factory.py
 
+from app.services.llm.gemini_llm import GeminiLLM
 from app.services.llm.groq_llm   import GroqLLM
 from app.services.llm.ollama_llm import OllamaLLM
 
 _REGISTRY = {
     "groq":   GroqLLM,
     "ollama": OllamaLLM,
+    "gemini": GeminiLLM,
 }
 
 
