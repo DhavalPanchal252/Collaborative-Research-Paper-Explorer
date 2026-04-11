@@ -95,7 +95,7 @@ _TITLE_MAX_CHARS: int = 60
 # BUG-6 FIX: Clean caption kept short for display (200 chars);
 # LLM receives raw caption up to _LLM_CAPTION_MAX_CHARS for better context.
 _CAPTION_MAX_CHARS:     int = 200
-_LLM_CAPTION_MAX_CHARS: int = 600   # full context for type/importance inference
+_LLM_CAPTION_MAX_CHARS: int = 200   # full context for type/importance inference
 
 _DESCRIPTION_MAX_CHARS: int = 300
 _CONF_MIN: float = 0.50
@@ -110,6 +110,11 @@ _BATCH_SIZE:         int = 4       # figures per LLM batch (3–5 range)
 _ALLOWED_TYPES: frozenset[str] = frozenset({
     "diagram", "graph", "chart", "table", "comparison", "image", "other",
 })
+# Canonical priority order: used in prompts; earlier = higher priority when
+# caption signals are ambiguous.  Matches the DECISION TREE in the prompt.
+_TYPE_PRIORITY_ORDER: tuple[str, ...] = (
+    "table", "graph", "comparison", "chart", "diagram", "image", "other",
+)
 _ALLOWED_IMPORTANCE: frozenset[str] = frozenset({"low", "medium", "high"})
 _UNKNOWN = "unknown"
 
@@ -329,11 +334,165 @@ def _create_batches(figures: list[dict[str, Any]]) -> list[list[dict[str, Any]]]
 # 3b — Batch prompt
 # ---------------------------------------------------------------------------
 
+# Shared type-classification block reused by both the batch prompt and the
+# single-figure prompt.  Centralising it ensures both paths get identical,
+# audited rules — and makes future updates a single-site change.
+#
+# Design rationale (derived from misclassification audit on AIN paper):
+#
+#   Root cause 1 — "diagram" false-positive from model/network language
+#     Caption contained "train an IN model / BN model" alongside loss-curve
+#     context → LLM chose "diagram".
+#     Fix: "graph" is checked FIRST and wins over "diagram" whenever any
+#     loss/curve/metric/iteration signal is present.
+#
+#   Root cause 2 — "comparison" false-negative for parameter-sweep visuals
+#     Caption described α=0 / 0.25 / 0.5 … row of images → LLM chose "graph"
+#     because "trade-off" and an equation were mentioned.
+#     Fix: explicit trigger "multiple images at different parameter values /
+#     weights / alpha" → "comparison".
+#
+#   Root cause 3 — "image" false-positive for interpolation grids
+#     Caption described a grid of visual outputs (style interpolation) with no
+#     "vs / compare / baseline" keyword → LLM defaulted to "image".
+#     Fix: "interpolation results", "grid of outputs", or any caption that
+#     describes multiple visual outputs from different configurations →
+#     "comparison".
+#
+#   Root cause 4 — "diagram" false-positive from spatial-layout language
+#     Caption said "Left: content image. Middle: style images with masks.
+#     Right: result." → LLM read "masks" and layout as a block-diagram.
+#     Fix: Left/Middle/Right or Left/Right layout descriptors describing
+#     image regions explicitly map to "comparison", never "diagram".
+
+_TYPE_CLASSIFICATION_RULES = """\
+TYPE CLASSIFICATION — follow this DECISION TREE in strict priority order.
+Stop at the FIRST rule that matches. Do NOT skip ahead.
+
+STEP 1 → "table"
+  MATCH if: caption explicitly describes rows, columns, numerical cells,
+  or a tabular data structure.
+  EXAMPLES: "Table of speed comparisons", "results organized in rows and columns"
+
+STEP 2 → "graph"
+  MATCH if caption contains ANY of these signals — even if model/network/
+  architecture language is ALSO present (graph beats diagram when metrics appear).
+
+  EXPLICIT metric signals (any of these → "graph"):
+    · loss, style loss, content loss, training loss
+    · accuracy, precision, recall, F1, AUC, mAP
+    · curve(s), plot(s), trend(s), convergence
+    · iteration(s), epoch(s), step(s) [on a measurement axis]
+    · metric(s), score(s) over time or thresholds
+    · "training curves", "learning curve", "loss vs iteration"
+    · quantitative comparison in terms of [metric]
+
+  IMPLICIT experiment signals — classify as "graph" when the caption
+  describes a controlled experiment comparing two or more models/conditions
+  and reports a quantitative outcome (improvement, effectiveness, difference):
+    · "[Model A] and [Model B]" + "improvement / effective / converge / faster"
+    · "We train [X] with [condition A], [condition B], [condition C]"
+      and mentions a measurable outcome or result
+    · "improvement brought by [method]", "remains significant", "much smaller"
+    · Sub-figures (a)(b)(c) each trained/run under different conditions
+
+  EXAMPLES:
+    ✅ "We train an IN model and a BN model with (a) original images, (b) contrast
+       normalized images … improvement brought by IN remains significant" → graph
+       [reason: controlled experiment comparing two models across conditions,
+        quantitative improvement reported — these are loss-curve subplots]
+    ✅ "Training curves of style and content loss" → graph
+    ✅ "Quantitative comparison … style and content loss … averaged over 50 images" → graph
+    ❌ "Overview of encoder-decoder pipeline architecture" → NOT graph → diagram
+
+STEP 3 → "comparison"
+  MATCH if caption describes ANY of these visual structures:
+    a) Multiple methods/models shown side-by-side
+       ("Ours vs Chen and Schmidt vs Gatys et al.")
+    b) Left / Right OR Left / Middle / Right layout describing image regions
+       ("Left: content image. Middle: style with masks. Right: result.")
+    c) Parameter sweep — multiple images at different values of a scalar:
+       α, λ, weight, level ("α = 0, α = 0.25, α = 0.5 …")
+       OR "trade-off" / "balance between" with a named parameter → output images
+    d) Interpolation grid — multiple outputs blended between two visual states
+       ("interpolate between styles", "convex combination … arbitrary new styles",
+        "style interpolation … different styles")
+    e) Before / after or input / output visual pairs
+    f) "Comparison with baselines", "ablation results", "qualitative examples"
+    g) Any figure whose caption describes multiple visual outputs from
+       different configurations, even without the word "comparison"
+    h) "Example [X] results" — visual output samples from a model or method
+       ("Example style transfer results", "example generation results")
+
+  IMPORTANT OVERRIDES:
+    · Left / Right / Middle spatial labels → ALWAYS "comparison", never "diagram"
+    · "trade-off" or "control the balance" + named parameter → "comparison"
+      (the figure shows a visual row at different parameter values, not a plot)
+    · "interpolate", "interpolation", "convex combination" of visual outputs
+      → "comparison", NOT "image" (multiple results are shown)
+    · Grid or row of stylised / generated images → "comparison", not "image"
+
+  EXAMPLES:
+    ✅ "Left: content image. Middle: two style images with masks. Right: result."
+       → comparison  [spatial layout of image regions]
+    ✅ "Content-style trade-off … α in Equ. 14"
+       → comparison  [row of output images at α=0 / 0.25 / 0.5 / 0.75 / 1]
+    ✅ "Style interpolation … convex combination … interpolate between new styles"
+       → comparison  [grid of interpolated visual outputs, NOT a single image]
+    ✅ "Example style transfer results … Ours / Chen / Ulyanov / Gatys"
+       → comparison
+    ✅ "Comparison with baselines. AdaIN is more effective than concatenation."
+       → comparison
+    ❌ "AdaIN(x,y) = σ(y)(x−µ(x)/σ(x)) + µ(y)" as a block schematic
+       → NOT comparison → diagram
+
+STEP 4 → "chart"
+  MATCH if: caption explicitly mentions bar chart, pie chart, histogram,
+  bar graph, or stacked bars.
+
+STEP 5 → "diagram"
+  MATCH if: caption describes a structural schematic — NOT visual image outputs.
+  Required signals: architecture, pipeline, framework, encoder, decoder,
+  block diagram, flowchart, module, network topology, system overview,
+  "overview of our [method]".
+  HARD EXCLUSIONS — do NOT classify as "diagram" if:
+    · Caption has loss / curve / metric / iteration / improvement signals → graph
+    · Caption has Left / Right / Middle image-layout labels → comparison
+    · Caption describes multiple visual method outputs → comparison
+    · Caption uses "trade-off", "balance", or α / λ parameter row → comparison
+  EXAMPLES:
+    ✅ "Overview of style transfer algorithm … VGG-19 encoder … AdaIN … decoder"
+       → diagram
+    ❌ "Left: content. Right: color-preserved result." → NOT diagram → comparison
+    ❌ "Style loss curves for BN vs IN model" → NOT diagram → graph
+    ❌ "Spatial control. Left: content. Middle: masks. Right: result."
+       → NOT diagram → comparison
+
+STEP 6 → "image"
+  MATCH ONLY if ALL of the following hold:
+    · Single natural photograph or standalone illustration
+    · No analytical structure (no axes, no parameter sweep, no grid of outputs)
+    · Not a visual comparison of multiple outputs or configurations
+    · Not an interpolation result showing several generated images
+  EXAMPLES:
+    ✅ A standalone photo used as an input example → image
+    ❌ A grid of stylised outputs → NOT image → comparison
+    ❌ Multiple generated images at different α values → NOT image → comparison
+
+STEP 7 → "other"
+  Use only when none of the above steps match.\
+"""
+
+
 def _build_batch_prompt(batch: list[dict[str, Any]]) -> str:
     """Construct a strict LLM prompt that processes multiple figures at once.
 
     The prompt instructs the model to return a JSON array — one object per
     figure — so we reduce N individual LLM calls to a single batch call.
+
+    Type classification uses ``_TYPE_CLASSIFICATION_RULES`` — a shared,
+    audited decision tree that fixes four documented misclassification
+    patterns (see module-level comment above that constant).
 
     Args:
         batch: List of ``{"id": ..., "clean_caption": ...}`` dicts produced
@@ -343,7 +502,6 @@ def _build_batch_prompt(batch: list[dict[str, Any]]) -> str:
         Fully-formed prompt string.  The model must respond with a valid JSON
         array and nothing else.
     """
-    # Serialise figures for injection into the prompt
     figures_block = "\n".join(
         f'  {{ "id": "{item["id"]}", "clean_caption": "{item["clean_caption"][:_LLM_CAPTION_MAX_CHARS]}" }}'
         for item in batch
@@ -362,48 +520,37 @@ def _build_batch_prompt(batch: list[dict[str, Any]]) -> str:
         "]\n\n"
         "---\n\n"
         "FOR EACH FIGURE, produce one JSON object with these exact fields:\n\n"
-        "1. \"id\"          → copy the id from the input exactly\n\n"
-        "2. \"type\"        → classify the figure. Choose EXACTLY ONE:\n"
-        '   * "graph"      → plots, curves, axes, trends, training metrics\n'
-        '   * "diagram"    → architecture, blocks, pipeline, flowchart, modules\n'
-        '   * "comparison" → multiple images/outputs compared side-by-side\n'
-        '   * "table"      → structured rows/columns with numeric/text data\n'
-        '   * "image"      → ONLY if natural image with no analytical structure\n'
-        '   * "chart"      → bar charts, pie charts, histograms\n'
-        '   * "other"      → none of the above\n'
-        "   STRICT: DO NOT default to \"image\".\n"
-        "   · curves/loss/accuracy/metrics → \"graph\"\n"
-        "   · comparison/results/vs/baseline → \"comparison\"\n"
-        "   · architecture/framework/pipeline/encoder/decoder → \"diagram\"\n\n"
-        "3. \"title\"       → max 12 words, Title Case, no 'Figure X', "
-        "no trailing punctuation\n\n"
-        "4. \"description\" → 1-2 sentences. Rules:\n"
-        '   · DO NOT start with "This figure shows" / "The figure shows"\n'
-        "   · Be direct: state WHAT the figure depicts and WHY it matters\n"
-        "   · Mention key concepts: model, metric, architecture, comparison, etc.\n"
-        "   · Avoid generic statements\n\n"
-        "5. \"importance\"  → choose EXACTLY ONE:\n"
-        '   * "high"   → key result, main method, architecture, primary comparison\n'
-        '   * "medium" → supporting result or secondary experiment\n'
-        '   * "low"    → minor visualization or illustrative example\n\n'
+        f"FIELD 1 — \"type\"\n{_TYPE_CLASSIFICATION_RULES}\n\n"
+        "FIELD 2 — \"title\"\n"
+        "  · Max 12 words, Title Case\n"
+        "  · No 'Figure X' prefix\n"
+        "  · No trailing punctuation\n\n"
+        "FIELD 3 — \"description\"\n"
+        "  · 1-2 sentences\n"
+        '  · DO NOT start with "This figure shows" / "The figure shows"\n'
+        "  · State WHAT is depicted and WHY it matters to the paper\n"
+        "  · Name key concepts: model name, metric, method, comparison target\n"
+        "  · Avoid generic filler sentences\n\n"
+        "FIELD 4 — \"importance\"\n"
+        '  · "high"   → primary result, main architecture, key comparison\n'
+        '  · "medium" → supporting experiment or secondary analysis\n'
+        '  · "low"    → minor illustration or supplementary visual\n\n'
         "---\n\n"
-        "OUTPUT FORMAT — return exactly this structure:\n"
+        "OUTPUT FORMAT:\n"
         "[\n"
         "  {\n"
-        '    "id":          "<copied from input>",\n'
-        '    "type":        "<one of the allowed values>",\n'
+        '    "id":          "<copied exactly from input>",\n'
+        '    "type":        "<table|graph|comparison|chart|diagram|image|other>",\n'
         '    "title":       "<max 12 words, Title Case>",\n'
         '    "description": "<1-2 direct sentences>",\n'
-        '    "importance":  "<high | medium | low>"\n'
+        '    "importance":  "<high|medium|low>"\n'
         "  },\n"
         "  ...\n"
         "]\n\n"
         "ABSOLUTE RULES:\n"
         f"· Output MUST be a JSON array with exactly {len(batch)} element(s)\n"
         "· Every element MUST include all 5 fields: id, type, title, description, importance\n"
-        "· No trailing commas\n"
-        "· No markdown fences\n"
-        "· No explanatory text before or after the array\n"
+        "· No trailing commas · No markdown fences · No text outside the array\n"
         "· No extra fields"
     )
 
