@@ -228,13 +228,13 @@ async def get_figures(session_id: str | None = None) -> JSONResponse:
             f"count={len(raw_figures)}"
         )
 
-    # ── 5. Refine figures (caption cleaning, titles, scores) ─────────────────
-    # NOTE (Phase 7.5+): When LLM calls are added, consider using asyncio.gather()
-    #                    for batch refinement to improve scalability.
+    # ── 5. Refine figures (caption cleaning, titles, scores) + LLM enrichment -
+    # Phase 7.4.1: Heuristic refinement (always runs)
+    # Phase 7.4.2: LLM enrichment (adds semantic understanding via Groq/Ollama)
     try:
         start_time = time.time()
         logger.info(f"[{request_id}] refinement started for {len(raw_figures)} figures")
-        refined_figures: list[dict] = await _refiner.refine(raw_figures)
+        refined_figures: list[dict] = await _refiner.refine_and_enrich(raw_figures)
         refinement_time = time.time() - start_time
         logger.info(
             f"[{request_id}] refinement completed in {refinement_time:.2f}s | "
