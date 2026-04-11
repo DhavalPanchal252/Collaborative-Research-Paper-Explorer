@@ -34,9 +34,12 @@ Phase 7.4.1 — Heuristic (CPU-only, always runs):
 
 Phase 7.4.2 — LLM intelligence (async, runs after 7.4.1):
     enrich_with_llm → overwrites title, type, description, importance
+    · BATCHED: groups figures into batches of _BATCH_SIZE (default 4)
+    · One LLM call per batch instead of one per figure
     · MD5 caption-hash cache (LRU, size-limited) avoids duplicate LLM calls
     · Strict 3-layer JSON validation + typed fallbacks
-    · Per-figure error isolation + configurable retry + timeout
+    · Per-batch error isolation + configurable retry + timeout
+    · asyncio.gather() concurrency, semaphore-limited to _LLM_MAX_CONCURRENT
 
 Public API
 ----------
@@ -92,16 +95,17 @@ _TITLE_MAX_CHARS: int = 60
 # BUG-6 FIX: Clean caption kept short for display (200 chars);
 # LLM receives raw caption up to _LLM_CAPTION_MAX_CHARS for better context.
 _CAPTION_MAX_CHARS:     int = 200
-_LLM_CAPTION_MAX_CHARS: int = 200   # full context for type/importance inference
+_LLM_CAPTION_MAX_CHARS: int = 600   # full context for type/importance inference
 
 _DESCRIPTION_MAX_CHARS: int = 300
 _CONF_MIN: float = 0.50
 _CONF_MAX: float = 0.95
 
 _CACHE_SIZE_LIMIT:   int = 1_000   # LRU eviction after this many entries
-_LLM_RETRY_ATTEMPTS: int = 2       # retries on transient failures
-_LLM_TIMEOUT_SECS:   int = 15      # per-call hard timeout
-_LLM_MAX_CONCURRENT: int = 2       # semaphore width (rate limiting)
+_LLM_RETRY_ATTEMPTS: int = 2       # retries on transient batch failures
+_LLM_TIMEOUT_SECS:   int = 30      # per-batch hard timeout (larger than per-figure)
+_LLM_MAX_CONCURRENT: int = 2       # semaphore width — max concurrent batch calls
+_BATCH_SIZE:         int = 4       # figures per LLM batch (3–5 range)
 
 _ALLOWED_TYPES: frozenset[str] = frozenset({
     "diagram", "graph", "chart", "table", "comparison", "image", "other",
@@ -292,110 +296,121 @@ def _caption_hash(clean_cap: str) -> str:
     return hashlib.md5(clean_cap.encode("utf-8", errors="replace")).hexdigest()
 
 
-def _build_enrichment_prompt(fig: dict[str, Any]) -> str:
-    """Construct a strict, domain-agnostic LLM enrichment prompt.
+# ---------------------------------------------------------------------------
+# 3a — Batching
+# ---------------------------------------------------------------------------
 
-    BUG-6 FIX: Uses the full raw caption (capped at 600 chars) as the primary
-    LLM signal instead of the 200-char display caption.  This prevents the LLM
-    from mis-classifying figures whose captions were truncated during cleaning.
+def _create_batches(figures: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """Partition figures into batches of size _BATCH_SIZE (default 4).
+
+    Only the minimal fields required by the LLM prompt are included in each
+    batch item: ``id`` and ``clean_caption``.  The caller is responsible for
+    mapping results back using the ``id`` key.
 
     Args:
-        fig: Phase 7.4.1-refined figure dict.
+        figures: Phase 7.4.1-refined figure dicts that need LLM enrichment
+                 (cache misses only — cached figures must be filtered out
+                 before calling this function).
 
     Returns:
-        Fully-formed prompt string.  Instructs the model to return raw JSON
-        only — no fences, no prose — so the response passes to json.loads()
-        directly.
+        List of batches; each batch is a list of
+        ``{"id": ..., "clean_caption": ...}`` dicts.
     """
-    fig_id   = fig.get("id", "unknown")
-    raw      = (fig.get("caption") or "").strip()
-    clean    = (fig.get("clean_caption") or "").strip()
+    batches: list[list[dict[str, Any]]] = []
+    for i in range(0, len(figures), _BATCH_SIZE):
+        chunk = figures[i : i + _BATCH_SIZE]
+        batches.append(
+            [{"id": f.get("id", ""), "clean_caption": f.get("clean_caption", "")} for f in chunk]
+        )
+    return batches
 
-    # BUG-6 FIX: prefer full raw caption for LLM context (more signal).
-    # Cap at _LLM_CAPTION_MAX_CHARS to avoid context overflow.
-    if raw and raw.lower() != "no caption":
-        llm_caption = raw[:_LLM_CAPTION_MAX_CHARS]
-        if len(raw) > _LLM_CAPTION_MAX_CHARS:
-            llm_caption += "…"
-    else:
-        llm_caption = clean or "(no caption)"
 
-    # FIX-B: Strict, rule-driven prompt that prevents the LLM from defaulting
-    # to "image".  Each type now has explicit trigger keywords and priority
-    # rules so the LLM cannot interpret ambiguous captions as generic images.
-    return (
-        "You are an expert research paper analyst.\n\n"
-        "Your task is to analyze a figure caption from a research paper "
-        "and generate structured metadata.\n\n"
-        "You MUST return ONLY a valid JSON object. "
-        "No explanation, no markdown, no extra text.\n\n"
-        "---\n\n"
-        "INPUT:\n"
-        f"Figure ID: {fig_id}\n\n"
-        f"Clean Caption:\n\"{clean}\"\n\n"
-        f"Original Caption (optional context, may contain noise):\n\"{llm_caption}\"\n\n"
-        "---\n\n"
-        "TASKS:\n\n"
-        "1. CLASSIFY FIGURE TYPE (STRICT)\n\n"
-        "Choose EXACTLY ONE from:\n\n"
-        '* "graph"      → if the figure contains plots, curves, axes, trends, '
-        "or training metrics\n"
-        '* "diagram"    → if it shows architecture, blocks, pipeline, '
-        "flowchart, modules\n"
-        '* "comparison" → if multiple images/outputs are compared side-by-side\n'
-        '* "table"      → if structured rows/columns with numeric/text data\n'
-        '* "image"      → ONLY if it is a natural image without analytical '
-        "structure\n"
-        '* "other"      → if none of the above apply\n\n'
-        "STRICT RULES:\n"
-        '* DO NOT default to "image"\n'
-        "* If curves, loss, accuracy, or metrics are mentioned → "
-        '"graph"\n'
-        '* If words like "comparison", "results", "vs", "baseline" → '
-        '"comparison"\n'
-        '* If "architecture", "framework", "pipeline", "overview", '
-        '"network", "encoder", "decoder" → "diagram"\n\n'
-        "---\n\n"
-        "2. GENERATE TITLE\n\n"
-        "* Max 12 words\n"
-        "* Clear, professional, human-readable\n"
-        '* No "Figure X"\n'
-        "* No punctuation at end\n"
-        "* Use Title Case\n\n"
-        "---\n\n"
-        "3. GENERATE DESCRIPTION\n\n"
-        "Write 1-2 sentences explaining the figure.\n\n"
-        "STRICT RULES:\n"
-        '* DO NOT start with "This figure shows", "The figure shows", '
-        '"This image shows"\n'
-        "* Be direct and meaningful\n"
-        "* Focus on WHAT + WHY (purpose of the figure)\n"
-        "* Mention key concepts: model, loss, comparison, architecture, etc.\n"
-        "* Avoid generic statements\n\n"
-        'GOOD: "Comparison of IN and BN model convergence on style-normalized '
-        'images, demonstrating that IN performs style normalization."\n'
-        'BAD:  "This figure shows a comparison."\n\n'
-        "---\n\n"
-        "4. DETERMINE IMPORTANCE\n\n"
-        '* "high"   → key result, comparison, main method, architecture\n'
-        '* "medium" → supporting result or experiment\n'
-        '* "low"    → minor visualization or example\n\n'
-        "---\n\n"
-        "OUTPUT FORMAT:\n\n"
-        "{\n"
-        '  "type":        "...",\n'
-        '  "title":       "...",\n'
-        '  "description": "...",\n'
-        '  "importance":  "..."\n'
-        "}\n\n"
-        "FINAL RULES:\n"
-        "* Output MUST be valid JSON\n"
-        "* No trailing commas\n"
-        "* No extra text\n"
-        "* No markdown\n"
-        "* No explanation"
+# ---------------------------------------------------------------------------
+# 3b — Batch prompt
+# ---------------------------------------------------------------------------
+
+def _build_batch_prompt(batch: list[dict[str, Any]]) -> str:
+    """Construct a strict LLM prompt that processes multiple figures at once.
+
+    The prompt instructs the model to return a JSON array — one object per
+    figure — so we reduce N individual LLM calls to a single batch call.
+
+    Args:
+        batch: List of ``{"id": ..., "clean_caption": ...}`` dicts produced
+               by :func:`_create_batches`.
+
+    Returns:
+        Fully-formed prompt string.  The model must respond with a valid JSON
+        array and nothing else.
+    """
+    # Serialise figures for injection into the prompt
+    figures_block = "\n".join(
+        f'  {{ "id": "{item["id"]}", "clean_caption": "{item["clean_caption"][:_LLM_CAPTION_MAX_CHARS]}" }}'
+        for item in batch
     )
 
+    return (
+        "You are an expert research paper analyst.\n\n"
+        "Your task is to analyze MULTIPLE figure captions from a research paper "
+        "and generate structured metadata for EACH one.\n\n"
+        "You MUST return ONLY a valid JSON array. "
+        "No explanation, no markdown, no extra text, no prose before or after.\n\n"
+        "---\n\n"
+        "INPUT FIGURES:\n"
+        "[\n"
+        f"{figures_block}\n"
+        "]\n\n"
+        "---\n\n"
+        "FOR EACH FIGURE, produce one JSON object with these exact fields:\n\n"
+        "1. \"id\"          → copy the id from the input exactly\n\n"
+        "2. \"type\"        → classify the figure. Choose EXACTLY ONE:\n"
+        '   * "graph"      → plots, curves, axes, trends, training metrics\n'
+        '   * "diagram"    → architecture, blocks, pipeline, flowchart, modules\n'
+        '   * "comparison" → multiple images/outputs compared side-by-side\n'
+        '   * "table"      → structured rows/columns with numeric/text data\n'
+        '   * "image"      → ONLY if natural image with no analytical structure\n'
+        '   * "chart"      → bar charts, pie charts, histograms\n'
+        '   * "other"      → none of the above\n'
+        "   STRICT: DO NOT default to \"image\".\n"
+        "   · curves/loss/accuracy/metrics → \"graph\"\n"
+        "   · comparison/results/vs/baseline → \"comparison\"\n"
+        "   · architecture/framework/pipeline/encoder/decoder → \"diagram\"\n\n"
+        "3. \"title\"       → max 12 words, Title Case, no 'Figure X', "
+        "no trailing punctuation\n\n"
+        "4. \"description\" → 1-2 sentences. Rules:\n"
+        '   · DO NOT start with "This figure shows" / "The figure shows"\n'
+        "   · Be direct: state WHAT the figure depicts and WHY it matters\n"
+        "   · Mention key concepts: model, metric, architecture, comparison, etc.\n"
+        "   · Avoid generic statements\n\n"
+        "5. \"importance\"  → choose EXACTLY ONE:\n"
+        '   * "high"   → key result, main method, architecture, primary comparison\n'
+        '   * "medium" → supporting result or secondary experiment\n'
+        '   * "low"    → minor visualization or illustrative example\n\n'
+        "---\n\n"
+        "OUTPUT FORMAT — return exactly this structure:\n"
+        "[\n"
+        "  {\n"
+        '    "id":          "<copied from input>",\n'
+        '    "type":        "<one of the allowed values>",\n'
+        '    "title":       "<max 12 words, Title Case>",\n'
+        '    "description": "<1-2 direct sentences>",\n'
+        '    "importance":  "<high | medium | low>"\n'
+        "  },\n"
+        "  ...\n"
+        "]\n\n"
+        "ABSOLUTE RULES:\n"
+        f"· Output MUST be a JSON array with exactly {len(batch)} element(s)\n"
+        "· Every element MUST include all 5 fields: id, type, title, description, importance\n"
+        "· No trailing commas\n"
+        "· No markdown fences\n"
+        "· No explanatory text before or after the array\n"
+        "· No extra fields"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 3c — Per-field safe enrichment + single-figure parse (preserved from v1)
+# ---------------------------------------------------------------------------
 
 def _safe_enrichment(fallback: dict[str, Any]) -> dict[str, Any]:
     """Return safe placeholder enrichment when LLM response cannot be parsed."""
@@ -407,58 +422,47 @@ def _safe_enrichment(fallback: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _parse_llm_response(raw_response: str, fallback: dict[str, Any]) -> dict[str, Any]:
-    """Parse and validate the LLM JSON response with three defence layers.
+def _validate_enrichment_item(
+    item: dict[str, Any],
+    fallback: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate and normalise a single enrichment object from the batch response.
 
-    Layer 1 — Strip markdown fences.
-    Layer 2 — JSON parse; fallback to extracting first {...} block.
-    Layer 3 — Per-field validation; replace invalid values with safe defaults.
+    Applies the same 3-layer defence as the original ``_parse_llm_response``:
+    field presence, allowed-value checks, and length caps.
+
+    Args:
+        item:     Raw dict parsed from the LLM's JSON array element.
+        fallback: Phase 7.4.1 figure dict used to supply safe defaults.
 
     Returns:
         Dict with ``title``, ``type``, ``description``, ``importance`` —
         all guaranteed non-None and schema-conformant.
     """
-    # ── Layer 1: strip markdown wrappers ─────────────────────────────────────
-    cleaned = raw_response.strip()
-    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\s*```$",          "", cleaned).strip()
-
-    # ── Layer 2: JSON parse ──────────────────────────────────────────────────
-    data: dict | None = None
-    try:
-        data = json.loads(cleaned)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-        if match:
-            try:
-                data = json.loads(match.group())
-            except json.JSONDecodeError:
-                pass
-
-    if data is None:
-        logger.warning("_parse_llm_response: JSON parse failed — using safe fallback.")
-        return _safe_enrichment(fallback)
-
-    # ── Layer 3: per-field validation ─────────────────────────────────────────
-    title: str = str(data.get("title") or "").strip()
+    # title
+    title: str = str(item.get("title") or "").strip()
     if not title:
         title = fallback.get("title", "Untitled Figure")
 
-    fig_type: str = str(data.get("type") or "").strip().lower()
+    # type
+    fig_type: str = str(item.get("type") or "").strip().lower()
     if fig_type not in _ALLOWED_TYPES:
         logger.debug(
-            "_parse_llm_response: type '%s' not allowed — defaulting to 'other'.",
+            "_validate_enrichment_item: type '%s' not in allowed set — "
+            "defaulting to 'other'.",
             fig_type,
         )
         fig_type = "other"
 
-    description: str = str(data.get("description") or "").strip()
+    # description
+    description: str = str(item.get("description") or "").strip()
     if not description:
         description = fallback.get("description", "")
     if len(description) > _DESCRIPTION_MAX_CHARS:
         description = description[:_DESCRIPTION_MAX_CHARS].rstrip() + "…"
 
-    importance: str = str(data.get("importance") or "").strip().lower()
+    # importance
+    importance: str = str(item.get("importance") or "").strip().lower()
     if importance not in _ALLOWED_IMPORTANCE:
         importance = fallback.get("importance", _UNKNOWN)
         if importance not in _ALLOWED_IMPORTANCE:
@@ -470,6 +474,116 @@ def _parse_llm_response(raw_response: str, fallback: dict[str, Any]) -> dict[str
         "description": description,
         "importance":  importance,
     }
+
+
+# ---------------------------------------------------------------------------
+# 3d — Batch response parser
+# ---------------------------------------------------------------------------
+
+def _parse_batch_response(
+    response: str,
+    batch_figures: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Parse and validate a JSON-array LLM response for an entire batch.
+
+    Returns a mapping of figure-id → validated enrichment dict.  When parsing
+    fails entirely, safe fallback enrichment is returned for every figure in
+    the batch so the pipeline never stalls.
+
+    Parsing strategy (3 layers):
+      Layer 1 — Strip markdown fences (```json … ```)
+      Layer 2 — JSON parse; fall back to extracting the first […] array block
+      Layer 3 — Per-item field validation via _validate_enrichment_item()
+
+    Args:
+        response:      Raw string returned by the LLM.
+        batch_figures: The original Phase 7.4.1 dicts for this batch
+                       (used as fallback sources keyed by ``id``).
+
+    Returns:
+        ``{fig_id: enrichment_dict}`` for every figure in *batch_figures*.
+        Missing ids in the LLM response are filled with safe fallbacks.
+    """
+    # Build id → fallback map for quick lookup during validation
+    fallback_map: dict[str, dict[str, Any]] = {
+        f.get("id", ""): f for f in batch_figures
+    }
+
+    # ── Layer 1: strip markdown wrappers ─────────────────────────────────────
+    cleaned = response.strip()
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$",          "", cleaned).strip()
+
+    # ── Layer 2: JSON parse ──────────────────────────────────────────────────
+    data: list | None = None
+
+    try:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, list):
+            data = parsed
+        else:
+            logger.warning(
+                "_parse_batch_response: expected JSON array, got %s — "
+                "attempting fallback extraction.",
+                type(parsed).__name__,
+            )
+    except json.JSONDecodeError:
+        pass
+
+    if data is None:
+        # Fallback: try to extract the first [...] block from the raw text
+        match = re.search(r"\[.*\]", cleaned, re.DOTALL)
+        if match:
+            try:
+                parsed = json.loads(match.group())
+                if isinstance(parsed, list):
+                    data = parsed
+            except json.JSONDecodeError:
+                pass
+
+    if data is None:
+        logger.warning(
+            "_parse_batch_response: JSON array parse failed for batch of %d "
+            "figures — using safe fallbacks for all.",
+            len(batch_figures),
+        )
+        return {
+            fig_id: _safe_enrichment(fallback_map.get(fig_id, {}))
+            for fig_id in fallback_map
+        }
+
+    # ── Layer 3: per-item validation ─────────────────────────────────────────
+    result: dict[str, dict[str, Any]] = {}
+
+    for item in data:
+        if not isinstance(item, dict):
+            logger.debug(
+                "_parse_batch_response: skipping non-dict item: %r", item
+            )
+            continue
+
+        fig_id = str(item.get("id") or "").strip()
+        if not fig_id or fig_id not in fallback_map:
+            logger.debug(
+                "_parse_batch_response: unknown/missing id '%s' in response — "
+                "skipping.",
+                fig_id,
+            )
+            continue
+
+        result[fig_id] = _validate_enrichment_item(item, fallback_map[fig_id])
+
+    # Fill in any ids the model omitted
+    for fig_id, fallback in fallback_map.items():
+        if fig_id not in result:
+            logger.warning(
+                "_parse_batch_response: id '%s' absent from LLM response — "
+                "using safe fallback.",
+                fig_id,
+            )
+            result[fig_id] = _safe_enrichment(fallback)
+
+    return result
 
 
 # ============================================================================
@@ -484,10 +598,13 @@ class FigureRefiner:
         ⚠ LLM fields remain ``"unknown"`` / ``""`` after this phase alone.
 
     Phase 7.4.2 — ``enrich_with_llm(refined_figures)``
-        LLM-backed enrichment: fills title, type, description, importance.
-        LRU cache (size-limited) avoids repeated calls for the same caption.
-        Per-figure error isolation — one LLM failure never aborts the batch.
-        Parallel execution with semaphore-based rate limiting.
+        BATCHED LLM enrichment: groups figures into batches of _BATCH_SIZE,
+        issues one LLM call per batch, parses the JSON-array response, and
+        merges results back.  Cache-hit figures bypass batching entirely.
+
+        · LRU cache (size-limited) avoids repeated calls for the same caption.
+        · Per-batch error isolation — one failed batch never aborts others.
+        · asyncio.gather() concurrency, semaphore-limited to _LLM_MAX_CONCURRENT.
 
     Combined — ``refine_and_enrich(figures)``  ← RECOMMENDED for route handlers
         Runs both phases in sequence.
@@ -499,23 +616,20 @@ class FigureRefiner:
 
     def __init__(self, llm_model: str = "groq") -> None:
         self._llm_model: str = llm_model
+
         # LRU cache: {md5(clean_caption): enrichment_dict}
         self._cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
-        # BUG-4 FIX: removed _cache_timestamp (was allocated but never used)
 
-        # BUG-1 FIX: Semaphore is NOT created here.
-        # asyncio.Semaphore() requires a running event loop.  Creating it in
-        # __init__ (called at import/startup time, outside any loop) causes
-        # DeprecationWarning in Python ≥3.10 and RuntimeError in ≥3.12 when
-        # the semaphore is later used in FastAPI's event loop.
-        # Solution: lazy property — initialised on first async call.
+        # BUG-1 FIX: Semaphore is NOT created here — lazy init on first async call.
         self._llm_semaphore: asyncio.Semaphore | None = None
 
         # Observability counters
-        self._llm_calls:    int = 0
-        self._llm_timeouts: int = 0
-        self._cache_hits:   int = 0
-        self._cache_misses: int = 0
+        self._llm_calls:     int = 0
+        self._llm_timeouts:  int = 0
+        self._cache_hits:    int = 0
+        self._cache_misses:  int = 0
+        self._batch_calls:   int = 0   # NEW: total batch LLM calls issued
+        self._batch_errors:  int = 0   # NEW: batches that triggered fallback
 
     def _get_semaphore(self) -> asyncio.Semaphore:
         """Return (or lazily create) the concurrency semaphore.
@@ -549,20 +663,165 @@ class FigureRefiner:
         return [_refine_one(fig) for fig in figures]
 
     # ------------------------------------------------------------------
-    # Phase 7.4.2
+    # Phase 7.4.2 — internal batch machinery
+    # ------------------------------------------------------------------
+
+    async def _enrich_batch_limited(
+        self,
+        batch_figures: list[dict[str, Any]],
+        llm: Any,
+    ) -> dict[str, dict[str, Any]]:
+        """Acquire the concurrency semaphore then call ``_enrich_batch``.
+
+        This mirrors the old ``_enrich_one_limited`` pattern but operates on
+        an entire batch, honouring the ``_LLM_MAX_CONCURRENT`` semaphore so
+        at most that many batch calls run in parallel.
+
+        Args:
+            batch_figures: Subset of Phase 7.4.1 figures to enrich together.
+            llm:           Callable LLM instance (GroqLLM, OllamaLLM, …).
+
+        Returns:
+            ``{fig_id: enrichment_dict}`` for every figure in *batch_figures*.
+        """
+        async with self._get_semaphore():
+            return await self._enrich_batch(batch_figures, llm)
+
+    async def _enrich_batch(
+        self,
+        batch_figures: list[dict[str, Any]],
+        llm: Any,
+    ) -> dict[str, dict[str, Any]]:
+        """Issue ONE LLM call for the entire batch; parse and validate the response.
+
+        Features:
+          · Single LLM call replaces N per-figure calls (N = batch size)
+          · asyncio.to_thread() keeps the event loop unblocked
+          · Configurable retry with linear backoff for transient failures
+          · Hard timeout per batch (scaled up vs per-figure timeout)
+          · On total failure → safe fallbacks for every figure in the batch,
+            pipeline continues uninterrupted
+
+        Args:
+            batch_figures: Phase 7.4.1-refined figure dicts for this batch.
+            llm:           Callable LLM instance.
+
+        Returns:
+            ``{fig_id: enrichment_dict}`` — always one entry per input figure.
+        """
+        batch_ids = [f.get("id", "") for f in batch_figures]
+        # Minimal batch representation for the prompt (id + clean_caption only)
+        batch_input = [
+            {"id": f.get("id", ""), "clean_caption": f.get("clean_caption", "")}
+            for f in batch_figures
+        ]
+        prompt = _build_batch_prompt(batch_input)
+
+        logger.debug(
+            "_enrich_batch: batch=%s prompt_len=%d",
+            batch_ids, len(prompt),
+        )
+
+        raw_response: str | None = None
+
+        for attempt in range(_LLM_RETRY_ATTEMPTS):
+            try:
+                self._llm_calls  += 1
+                self._batch_calls += 1
+
+                raw_response = await asyncio.wait_for(
+                    asyncio.to_thread(llm, prompt=prompt),
+                    timeout=_LLM_TIMEOUT_SECS,
+                )
+
+                logger.debug(
+                    "_enrich_batch: LLM response batch=%s (%d chars)",
+                    batch_ids, len(raw_response or ""),
+                )
+                # Brief courtesy pause to avoid hammering rate limits
+                await asyncio.sleep(0.5)
+                break  # ── success ──────────────────────────────────────────
+
+            except asyncio.TimeoutError:
+                self._llm_timeouts += 1
+                if attempt < _LLM_RETRY_ATTEMPTS - 1:
+                    logger.warning(
+                        "_enrich_batch: timeout (attempt %d/%d) batch=%s — retrying",
+                        attempt + 1, _LLM_RETRY_ATTEMPTS, batch_ids,
+                    )
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                else:
+                    logger.error(
+                        "_enrich_batch: timeout after %d attempts batch=%s — "
+                        "using safe fallbacks.",
+                        _LLM_RETRY_ATTEMPTS, batch_ids,
+                    )
+                    self._batch_errors += 1
+                    return {
+                        f.get("id", ""): _safe_enrichment(f)
+                        for f in batch_figures
+                    }
+
+            except Exception as exc:  # noqa: BLE001
+                if attempt < _LLM_RETRY_ATTEMPTS - 1:
+                    logger.warning(
+                        "_enrich_batch: LLM error (attempt %d/%d) batch=%s: %s — retrying",
+                        attempt + 1, _LLM_RETRY_ATTEMPTS, batch_ids, exc,
+                    )
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                else:
+                    logger.error(
+                        "_enrich_batch: LLM failed after %d attempts batch=%s: %s — "
+                        "using safe fallbacks.",
+                        _LLM_RETRY_ATTEMPTS, batch_ids, exc,
+                    )
+                    self._batch_errors += 1
+                    return {
+                        f.get("id", ""): _safe_enrichment(f)
+                        for f in batch_figures
+                    }
+
+        if raw_response is None:
+            self._batch_errors += 1
+            return {f.get("id", ""): _safe_enrichment(f) for f in batch_figures}
+
+        # ── Parse + validate the JSON-array response ──────────────────────────
+        enrichment_map = _parse_batch_response(raw_response, batch_figures)
+
+        for fig_id, enrichment in enrichment_map.items():
+            logger.debug(
+                "_enrich_batch: fig='%s' → type='%s' importance='%s' title='%.50s'",
+                fig_id, enrichment["type"], enrichment["importance"], enrichment["title"],
+            )
+
+        return enrichment_map
+
+    # ------------------------------------------------------------------
+    # Phase 7.4.2 — public entry point
     # ------------------------------------------------------------------
 
     async def enrich_with_llm(
         self,
         figures: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        """Enrich Phase 7.4.1-refined figures with LLM semantic understanding.
+        """Enrich Phase 7.4.1-refined figures with batched LLM semantic analysis.
 
-        For each figure:
-          1. Hash ``clean_caption`` and check LRU cache.
-          2. Cache hit  → merge cached enrichment, skip LLM.
-          3. Cache miss → call LLM (with retry + timeout), validate JSON, cache.
-          4. Any error  → log it, return figure with 7.4.1 placeholder values.
+        NEW FLOW (vs single-figure v1):
+          1. Resolve cache — figures whose clean_caption is already cached skip
+             the LLM entirely.
+          2. Create batches — remaining cache-miss figures are grouped into
+             batches of _BATCH_SIZE using _create_batches().
+          3. Process batches — all batches are dispatched concurrently via
+             asyncio.gather(); the semaphore caps concurrency at
+             _LLM_MAX_CONCURRENT (default 2).
+          4. Store cache — each result in every batch response is written to the
+             LRU cache (evicting oldest entry when _CACHE_SIZE_LIMIT is reached).
+          5. Merge — enrichment is applied to the original figure dicts and the
+             full list is returned in the original input order.
+
+        Error isolation:
+          If a batch fails after all retries, safe fallback enrichment is used
+          for that batch only.  Other batches and all cache hits are unaffected.
 
         Args:
             figures: Phase 7.4.1-refined figure dicts.
@@ -587,156 +846,118 @@ class FigureRefiner:
             return figures
 
         logger.info(
-            "enrich_with_llm: starting enrichment for %d figures (cache_size=%d)",
-            len(figures), len(self._cache),
+            "enrich_with_llm: starting batched enrichment for %d figures "
+            "(cache_size=%d, batch_size=%d)",
+            len(figures), len(self._cache), _BATCH_SIZE,
         )
 
-        # BUG-2 FIX: return_exceptions=True so one failure does not cancel
-        # the entire gather.  Exceptions are handled per-item below.
-        raw_results = await asyncio.gather(
-            *[self._enrich_one_limited(fig, llm) for fig in figures],
-            return_exceptions=True,
+        # ── Step 1: Resolve cache ─────────────────────────────────────────────
+        # Pre-compute cache keys once; split figures into hits and misses.
+        cache_keys: dict[str, str] = {
+            f.get("id", ""): _caption_hash((f.get("clean_caption") or "").strip())
+            for f in figures
+        }
+
+        cached_enrichments: dict[str, dict[str, Any]] = {}   # id → enrichment
+        uncached_figures:   list[dict[str, Any]]       = []
+
+        for fig in figures:
+            fig_id    = fig.get("id", "")
+            cache_key = cache_keys[fig_id]
+
+            if cache_key in self._cache:
+                self._cache_hits += 1
+                self._cache.move_to_end(cache_key)
+                cached_enrichments[fig_id] = self._cache[cache_key]
+                logger.debug(
+                    "enrich_with_llm: cache hit  fig='%s' key=%s…",
+                    fig_id, cache_key[:8],
+                )
+            else:
+                self._cache_misses += 1
+                uncached_figures.append(fig)
+
+        logger.info(
+            "enrich_with_llm: cache_hits=%d cache_misses=%d uncached_figures=%d",
+            len(cached_enrichments), len(uncached_figures), len(uncached_figures),
         )
 
-        # Resolve exceptions: fall back to original figure on unexpected error
+        # ── Step 2: Create batches from cache-miss figures ────────────────────
+        all_enrichments: dict[str, dict[str, Any]] = dict(cached_enrichments)
+
+        if uncached_figures:
+            batches = _create_batches(uncached_figures)
+            logger.info(
+                "enrich_with_llm: %d uncached figures → %d batch(es)",
+                len(uncached_figures), len(batches),
+            )
+
+            # ── Step 3: Process all batches concurrently (semaphore-limited) ──
+            # BUG-2 pattern: return_exceptions=True so one batch failure cannot
+            # cancel the entire gather.
+            batch_results = await asyncio.gather(
+                *[self._enrich_batch_limited(batch, llm) for batch in batches],
+                return_exceptions=True,
+            )
+
+            # ── Step 4: Store cache + merge batch results ─────────────────────
+            for batch_figs, batch_result in zip(batches, batch_results):
+                if isinstance(batch_result, Exception):
+                    # Unexpected coroutine-level exception (not an LLM error —
+                    # those are handled inside _enrich_batch).  Use safe fallbacks.
+                    logger.error(
+                        "enrich_with_llm: unexpected exception from batch %s: %s — "
+                        "using safe fallbacks for that batch.",
+                        [f.get("id") for f in batch_figs], batch_result,
+                    )
+                    self._batch_errors += 1
+                    for fig in batch_figs:
+                        all_enrichments[fig.get("id", "")] = _safe_enrichment(fig)
+                    continue
+
+                # batch_result is a dict: {fig_id: enrichment_dict}
+                for fig in batch_figs:
+                    fig_id    = fig.get("id", "")
+                    cache_key = cache_keys[fig_id]
+                    enrichment = batch_result.get(fig_id, _safe_enrichment(fig))
+
+                    # Store in LRU cache
+                    self._cache[cache_key] = enrichment
+                    self._cache.move_to_end(cache_key)
+                    if len(self._cache) > _CACHE_SIZE_LIMIT:
+                        evicted, _ = self._cache.popitem(last=False)
+                        logger.debug(
+                            "enrich_with_llm: LRU eviction key=%s…", evicted[:8]
+                        )
+
+                    all_enrichments[fig_id] = enrichment
+
+        # ── Step 5: Merge enrichments back into figures (preserve input order) ─
         enriched: list[dict[str, Any]] = []
-        for fig, result in zip(figures, raw_results):
-            if isinstance(result, Exception):
-                logger.error(
-                    "enrich_with_llm: unexpected error for fig='%s': %s — "
+        for fig in figures:
+            fig_id     = fig.get("id", "")
+            enrichment = all_enrichments.get(fig_id)
+            if enrichment:
+                enriched.append({**fig, **enrichment})
+            else:
+                # Should not happen, but never crash the pipeline
+                logger.warning(
+                    "enrich_with_llm: no enrichment found for fig='%s' — "
                     "returning Phase 7.4.1 output.",
-                    fig.get("id"), result,
+                    fig_id,
                 )
                 enriched.append(fig)
-            else:
-                enriched.append(result)
 
         logger.info(
             "enrich_with_llm: complete | total=%d | cache_size=%d | "
-            "hits=%d | misses=%d | llm_calls=%d | timeouts=%d",
+            "cache_hits=%d | cache_misses=%d | llm_calls=%d | "
+            "batch_calls=%d | batch_errors=%d | timeouts=%d",
             len(enriched), len(self._cache),
             self._cache_hits, self._cache_misses,
-            self._llm_calls, self._llm_timeouts,
+            self._llm_calls, self._batch_calls,
+            self._batch_errors, self._llm_timeouts,
         )
         return enriched
-
-    async def _enrich_one_limited(
-        self,
-        fig: dict[str, Any],
-        llm: Any,
-    ) -> dict[str, Any]:
-        """Run _enrich_one() under the concurrency semaphore.
-
-        BUG-1 FIX: Semaphore obtained via _get_semaphore() (lazy init inside
-        running event loop) instead of from __init__.
-        """
-        async with self._get_semaphore():
-            return await self._enrich_one(fig, llm)
-
-    async def _enrich_one(
-        self,
-        fig: dict[str, Any],
-        llm: Any,
-    ) -> dict[str, Any]:
-        """Enrich a single figure; isolated so failures cannot affect siblings.
-
-        Features:
-          · Non-blocking LLM call via asyncio.to_thread()
-          · Configurable retry with backoff for transient failures
-          · Hard timeout per call
-          · LRU cache eviction at _CACHE_SIZE_LIMIT
-
-        Args:
-            fig: Phase 7.4.1-refined figure dict.
-            llm: Callable LLM instance (GroqLLM, OllamaLLM, …).
-
-        Returns:
-            Figure dict with LLM-owned fields merged in.
-            Returns original dict unchanged on any unrecoverable error.
-        """
-        clean     = (fig.get("clean_caption") or "").strip()
-        cache_key = _caption_hash(clean)
-
-        # ── Cache hit ─────────────────────────────────────────────────────────
-        if cache_key in self._cache:
-            self._cache_hits += 1
-            self._cache.move_to_end(cache_key)  # refresh LRU position
-            logger.debug(
-                "_enrich_one: cache hit  fig='%s' key=%s…",
-                fig.get("id"), cache_key[:8],
-            )
-            return {**fig, **self._cache[cache_key]}
-
-        # ── LLM call with retry ───────────────────────────────────────────────
-        self._cache_misses += 1
-        prompt = _build_enrichment_prompt(fig)
-        # BUG-5 FIX: Removed 4 print() debug statements; use logger.debug()
-        logger.debug("_enrich_one: prompt built for fig='%s' (%d chars)", fig.get("id"), len(prompt))
-
-        raw_response: str | None = None
-
-        for attempt in range(_LLM_RETRY_ATTEMPTS):
-            try:
-                self._llm_calls += 1
-                raw_response = await asyncio.wait_for(
-                    asyncio.to_thread(llm, prompt=prompt),
-                    timeout=_LLM_TIMEOUT_SECS,
-                )
-                logger.debug(
-                    "_enrich_one: LLM response  fig='%s' (%d chars)",
-                    fig.get("id"), len(raw_response or ""),
-                )
-                # Add delay after each successful call to rate-limit LLM
-                await asyncio.sleep(1)
-                break  # success
-
-            except asyncio.TimeoutError:
-                self._llm_timeouts += 1
-                if attempt < _LLM_RETRY_ATTEMPTS - 1:
-                    logger.warning(
-                        "_enrich_one: timeout (attempt %d/%d) fig='%s' — retrying",
-                        attempt + 1, _LLM_RETRY_ATTEMPTS, fig.get("id"),
-                    )
-                    await asyncio.sleep(0.5 * (attempt + 1))
-                else:
-                    logger.error(
-                        "_enrich_one: timeout after %d attempts fig='%s'",
-                        _LLM_RETRY_ATTEMPTS, fig.get("id"),
-                    )
-                    return fig
-
-            except Exception as exc:  # noqa: BLE001
-                if attempt < _LLM_RETRY_ATTEMPTS - 1:
-                    logger.warning(
-                        "_enrich_one: LLM error (attempt %d/%d) fig='%s': %s — retrying",
-                        attempt + 1, _LLM_RETRY_ATTEMPTS, fig.get("id"), exc,
-                    )
-                    await asyncio.sleep(0.5 * (attempt + 1))
-                else:
-                    logger.error(
-                        "_enrich_one: LLM failed after %d attempts fig='%s': %s",
-                        _LLM_RETRY_ATTEMPTS, fig.get("id"), exc,
-                    )
-                    return fig
-
-        if raw_response is None:
-            return fig
-
-        # ── Parse + validate ──────────────────────────────────────────────────
-        enrichment = _parse_llm_response(raw_response, fallback=fig)
-        logger.debug(
-            "_enrich_one: fig='%s' → type='%s' importance='%s' title='%.50s'",
-            fig.get("id"), enrichment["type"], enrichment["importance"], enrichment["title"],
-        )
-
-        # ── LRU cache store ───────────────────────────────────────────────────
-        self._cache[cache_key] = enrichment
-        self._cache.move_to_end(cache_key)
-        if len(self._cache) > _CACHE_SIZE_LIMIT:
-            evicted, _ = self._cache.popitem(last=False)
-            logger.debug("_enrich_one: LRU eviction key=%s…", evicted[:8])
-
-        return {**fig, **enrichment}
 
     # ------------------------------------------------------------------
     # Combined convenience  ← USE THIS IN figure_routes.py  (BUG-7 FIX)
@@ -746,7 +967,7 @@ class FigureRefiner:
         self,
         figures: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        """Run Phase 7.4.1 heuristics then Phase 7.4.2 LLM enrichment.
+        """Run Phase 7.4.1 heuristics then Phase 7.4.2 batched LLM enrichment.
 
         ✅ This is the correct method to call from figure_routes.py.
            Calling ``refine()`` alone leaves type/importance/description as
@@ -766,10 +987,12 @@ class FigureRefiner:
     # ------------------------------------------------------------------
 
     def get_metrics(self) -> dict[str, Any]:
-        """Return current performance and cache statistics."""
+        """Return current performance, cache, and batch statistics."""
         total = self._cache_hits + self._cache_misses
         return {
             "llm_calls":      self._llm_calls,
+            "batch_calls":    self._batch_calls,
+            "batch_errors":   self._batch_errors,
             "llm_timeouts":   self._llm_timeouts,
             "cache_hits":     self._cache_hits,
             "cache_misses":   self._cache_misses,
@@ -780,6 +1003,8 @@ class FigureRefiner:
     def reset_metrics(self) -> None:
         """Reset all metrics counters (useful for per-batch benchmarking)."""
         self._llm_calls    = 0
+        self._batch_calls  = 0
+        self._batch_errors = 0
         self._llm_timeouts = 0
         self._cache_hits   = 0
         self._cache_misses = 0
