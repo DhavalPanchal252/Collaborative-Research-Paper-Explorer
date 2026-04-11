@@ -77,6 +77,12 @@ _SUBFIGURE_PREFIX_RE = re.compile(
     r"^\s*\(+[a-zA-Z\d]{1,2}\)+\.?\s*",
 )
 
+# FIX-A: Hyphenated line-break artifacts from PDF text extraction.
+# e.g. "effec-\ntive" → "effective", "meth-\nods" → "methods"
+# Only joins when BOTH sides of the hyphen are word characters so that
+# legitimate compound words like "color-preserved" are untouched.
+_HYPHEN_LINEBREAK_RE = re.compile(r"(\w)-\s*\n\s*(\w)")
+
 _CAPTION_QUALITY_MIN_LEN: int = 30
 _IMG_MIN_WIDTH:  int = 400
 _IMG_MIN_HEIGHT: int = 300
@@ -86,7 +92,7 @@ _TITLE_MAX_CHARS: int = 60
 # BUG-6 FIX: Clean caption kept short for display (200 chars);
 # LLM receives raw caption up to _LLM_CAPTION_MAX_CHARS for better context.
 _CAPTION_MAX_CHARS:     int = 200
-_LLM_CAPTION_MAX_CHARS: int = 600   # full context for type/importance inference
+_LLM_CAPTION_MAX_CHARS: int = 200   # full context for type/importance inference
 
 _DESCRIPTION_MAX_CHARS: int = 300
 _CONF_MIN: float = 0.50
@@ -125,7 +131,12 @@ def clean_caption(caption: str) -> str:
     if not caption or caption.strip().lower() == "no caption":
         return ""
 
-    text = re.sub(r"\s+", " ", caption).strip()
+    # FIX-A: Repair PDF hyphenated line-breaks BEFORE whitespace collapse.
+    # "effec-\ntive" → "effective"  |  "meth-\nods" → "methods"
+    # Must run before re.sub(r"\s+") so the \n is still present to detect.
+    text = _HYPHEN_LINEBREAK_RE.sub(r"\1\2", caption)
+
+    text = re.sub(r"\s+", " ", text).strip()
     text = _CAPTION_PREFIX_RE.sub("", text).strip()
     text = text.lstrip(". ").strip()
 
@@ -309,26 +320,80 @@ def _build_enrichment_prompt(fig: dict[str, Any]) -> str:
     else:
         llm_caption = clean or "(no caption)"
 
+    # FIX-B: Strict, rule-driven prompt that prevents the LLM from defaulting
+    # to "image".  Each type now has explicit trigger keywords and priority
+    # rules so the LLM cannot interpret ambiguous captions as generic images.
     return (
-        "You are a scientific figure analyst. "
-        "Analyse the figure caption below and return ONLY a JSON object. "
-        "No markdown, no code fences, no explanation — raw JSON only.\n\n"
-        f"Figure ID: {fig_id}\n"
-        f"Caption:\n\"\"\"\n{llm_caption}\n\"\"\"\n\n"
-        "Return a JSON object with EXACTLY these four keys:\n"
+        "You are an expert research paper analyst.\n\n"
+        "Your task is to analyze a figure caption from a research paper "
+        "and generate structured metadata.\n\n"
+        "You MUST return ONLY a valid JSON object. "
+        "No explanation, no markdown, no extra text.\n\n"
+        "---\n\n"
+        "INPUT:\n"
+        f"Figure ID: {fig_id}\n\n"
+        f"Clean Caption:\n\"{clean}\"\n\n"
+        f"Original Caption (optional context, may contain noise):\n\"{llm_caption}\"\n\n"
+        "---\n\n"
+        "TASKS:\n\n"
+        "1. CLASSIFY FIGURE TYPE (STRICT)\n\n"
+        "Choose EXACTLY ONE from:\n\n"
+        '* "graph"      → if the figure contains plots, curves, axes, trends, '
+        "or training metrics\n"
+        '* "diagram"    → if it shows architecture, blocks, pipeline, '
+        "flowchart, modules\n"
+        '* "comparison" → if multiple images/outputs are compared side-by-side\n'
+        '* "table"      → if structured rows/columns with numeric/text data\n'
+        '* "image"      → ONLY if it is a natural image without analytical '
+        "structure\n"
+        '* "other"      → if none of the above apply\n\n'
+        "STRICT RULES:\n"
+        '* DO NOT default to "image"\n'
+        "* If curves, loss, accuracy, or metrics are mentioned → "
+        '"graph"\n'
+        '* If words like "comparison", "results", "vs", "baseline" → '
+        '"comparison"\n'
+        '* If "architecture", "framework", "pipeline", "overview", '
+        '"network", "encoder", "decoder" → "diagram"\n\n'
+        "---\n\n"
+        "2. GENERATE TITLE\n\n"
+        "* Max 12 words\n"
+        "* Clear, professional, human-readable\n"
+        '* No "Figure X"\n'
+        "* No punctuation at end\n"
+        "* Use Title Case\n\n"
+        "---\n\n"
+        "3. GENERATE DESCRIPTION\n\n"
+        "Write 1-2 sentences explaining the figure.\n\n"
+        "STRICT RULES:\n"
+        '* DO NOT start with "This figure shows", "The figure shows", '
+        '"This image shows"\n'
+        "* Be direct and meaningful\n"
+        "* Focus on WHAT + WHY (purpose of the figure)\n"
+        "* Mention key concepts: model, loss, comparison, architecture, etc.\n"
+        "* Avoid generic statements\n\n"
+        'GOOD: "Comparison of IN and BN model convergence on style-normalized '
+        'images, demonstrating that IN performs style normalization."\n'
+        'BAD:  "This figure shows a comparison."\n\n'
+        "---\n\n"
+        "4. DETERMINE IMPORTANCE\n\n"
+        '* "high"   → key result, comparison, main method, architecture\n'
+        '* "medium" → supporting result or experiment\n'
+        '* "low"    → minor visualization or example\n\n'
+        "---\n\n"
+        "OUTPUT FORMAT:\n\n"
         "{\n"
-        '  "title":       "<concise, informative title, max 12 words>",\n'
-        '  "type":        "<one of: diagram | graph | chart | table | comparison | image | other>",\n'
-        '  "description": "<1–3 sentence plain-English description of what this figure shows>",\n'
-        '  "importance":  "<one of: low | medium | high>"\n'
+        '  "type":        "...",\n'
+        '  "title":       "...",\n'
+        '  "description": "...",\n'
+        '  "importance":  "..."\n'
         "}\n\n"
-        "RULES:\n"
-        "• title  — specific and descriptive; NOT generic like 'Research Figure'.\n"
-        "• type   — pick the single best match from the allowed list.\n"
-        "• description — describe what the figure SHOWS, not the paper's topic.\n"
-        "• importance — high = central result/method; medium = supporting; low = supplementary.\n"
-        "• If the caption is absent or uninformative, use your best inference.\n"
-        "• Output ONLY the JSON object. Nothing else."
+        "FINAL RULES:\n"
+        "* Output MUST be valid JSON\n"
+        "* No trailing commas\n"
+        "* No extra text\n"
+        "* No markdown\n"
+        "* No explanation"
     )
 
 
