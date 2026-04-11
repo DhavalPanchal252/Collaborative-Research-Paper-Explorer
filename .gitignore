@@ -59,3 +59,5 @@ research-explorer.html
 /gpt_notes
 
 backend/static/
+
+backend/app/services/llm/demo.py

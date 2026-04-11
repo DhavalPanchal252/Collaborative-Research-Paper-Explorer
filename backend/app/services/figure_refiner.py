@@ -2,8 +2,8 @@
 """
 Figure Refinement Engine — Phase 7.4.1 (heuristic) + Phase 7.4.2 (LLM).
 
-Bug fixes applied (vs previous version)
-----------------------------------------
+Bug fixes applied
+-----------------
 BUG-1  FIXED  asyncio.Semaphore() created in __init__ outside event loop.
               → Lazy property _llm_semaphore initialised on first async call.
 BUG-2  FIXED  asyncio.gather(return_exceptions=False) drops all results on
@@ -27,6 +27,21 @@ BUG-7  FIXED  ROOT CAUSE — figure_routes.py called refiner.refine() which
               → figure_routes.py updated to call refiner.refine_and_enrich().
               → Clear warning added to refine() docstring.
 
+Performance optimisations applied
+----------------------------------
+PERF-1  _BATCH_SIZE 4 → 5   — 10 figs → 2 batches instead of 3
+         (eliminates the forced second serial LLM round)
+PERF-2  _LLM_MAX_CONCURRENT 2 → 4   — all batches fire in parallel
+PERF-3  asyncio.sleep 0.5 → 0.1 per batch
+PERF-4  _LLM_RETRY_ATTEMPTS 2 → 1   — instant model, one retry is enough
+PERF-5  _LLM_TIMEOUT_SECS 30 → 20   — fail faster so Gemini fallback fires sooner
+PERF-6  Dynamic semaphore width = min(batch_count, _LLM_MAX_CONCURRENT)
+         — never over-allocates slots for a small batch count
+PERF-7  _needs_llm() fast-path — figures with no usable caption skip the
+         LLM entirely and get _safe_enrichment() directly
+
+Multi-model fallback (Groq → Gemini) also incorporated.
+
 Pipeline
 --------
 Phase 7.4.1 — Heuristic (CPU-only, always runs):
@@ -34,12 +49,13 @@ Phase 7.4.1 — Heuristic (CPU-only, always runs):
 
 Phase 7.4.2 — LLM intelligence (async, runs after 7.4.1):
     enrich_with_llm → overwrites title, type, description, importance
-    · BATCHED: groups figures into batches of _BATCH_SIZE (default 4)
+    · BATCHED: groups figures into batches of _BATCH_SIZE (default 5)
     · One LLM call per batch instead of one per figure
     · MD5 caption-hash cache (LRU, size-limited) avoids duplicate LLM calls
     · Strict 3-layer JSON validation + typed fallbacks
     · Per-batch error isolation + configurable retry + timeout
     · asyncio.gather() concurrency, semaphore-limited to _LLM_MAX_CONCURRENT
+    · Groq → Gemini fallback on failure, timeout, or low-quality output
 
 Public API
 ----------
@@ -101,11 +117,11 @@ _DESCRIPTION_MAX_CHARS: int = 300
 _CONF_MIN: float = 0.50
 _CONF_MAX: float = 0.95
 
-_CACHE_SIZE_LIMIT:   int = 1_000   # LRU eviction after this many entries
-_LLM_RETRY_ATTEMPTS: int = 2       # retries on transient batch failures
-_LLM_TIMEOUT_SECS:   int = 30      # per-batch hard timeout (larger than per-figure)
-_LLM_MAX_CONCURRENT: int = 2       # semaphore width — max concurrent batch calls
-_BATCH_SIZE:         int = 4       # figures per LLM batch (3–5 range)
+_CACHE_SIZE_LIMIT:   int = 1_000
+_LLM_RETRY_ATTEMPTS: int = 1        # PERF-4: instant model, one retry is enough
+_LLM_TIMEOUT_SECS:   int = 20       # PERF-5: fail fast; Gemini fallback takes over
+_LLM_MAX_CONCURRENT: int = 4        # PERF-2: allow all batches to run in parallel
+_BATCH_SIZE:         int = 5        # PERF-1: 10 figs → 2 batches instead of 3
 
 _ALLOWED_TYPES: frozenset[str] = frozenset({
     "diagram", "graph", "chart", "table", "comparison", "image", "other",
@@ -305,8 +321,18 @@ def _caption_hash(clean_cap: str) -> str:
 # 3a — Batching
 # ---------------------------------------------------------------------------
 
+def _needs_llm(fig: dict[str, Any]) -> bool:
+    """Return True only when the figure has enough text for the LLM to act on.
+
+    PERF-7: Figures with empty clean_caption produce useless LLM output
+    (type='other', description='') — identical to _safe_enrichment().
+    Skipping them avoids burning batch token budget on noise.
+    """
+    return bool((fig.get("clean_caption") or "").strip())
+
+
 def _create_batches(figures: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-    """Partition figures into batches of size _BATCH_SIZE (default 4).
+    """Partition figures into batches of size _BATCH_SIZE (default 5).
 
     Only the minimal fields required by the LLM prompt are included in each
     batch item: ``id`` and ``clean_caption``.  The caller is responsible for
@@ -556,7 +582,7 @@ def _build_batch_prompt(batch: list[dict[str, Any]]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 3c — Per-field safe enrichment + single-figure parse (preserved from v1)
+# 3c — Per-field safe enrichment + validation
 # ---------------------------------------------------------------------------
 
 def _safe_enrichment(fallback: dict[str, Any]) -> dict[str, Any]:
@@ -591,13 +617,6 @@ def _is_bad_batch(enrichment_map: dict[str, dict[str, Any]]) -> bool:
     Returns:
         ``True`` when >= 50 % of items are type="other" with empty description.
         ``False`` otherwise (including when the map is empty).
-
-    Examples:
-        >>> _is_bad_batch({"f1": {"type": "other", "description": ""}})
-        True   # 1 / 1 = 100 % ≥ 50 %
-        >>> _is_bad_batch({"f1": {"type": "graph",  "description": "Loss curves"},
-        ...                "f2": {"type": "other",  "description": ""}})
-        False  # 1 / 2 = 50 % — equal, not strictly greater; adjust threshold as needed
     """
     if not enrichment_map:
         return False
@@ -617,8 +636,7 @@ def _validate_enrichment_item(
 ) -> dict[str, Any]:
     """Validate and normalise a single enrichment object from the batch response.
 
-    Applies the same 3-layer defence as the original ``_parse_llm_response``:
-    field presence, allowed-value checks, and length caps.
+    Applies 3-layer defence: field presence, allowed-value checks, length caps.
 
     Args:
         item:     Raw dict parsed from the LLM's JSON array element.
@@ -794,6 +812,7 @@ class FigureRefiner:
         · LRU cache (size-limited) avoids repeated calls for the same caption.
         · Per-batch error isolation — one failed batch never aborts others.
         · asyncio.gather() concurrency, semaphore-limited to _LLM_MAX_CONCURRENT.
+        · Groq → Gemini fallback on failure, timeout, or low-quality output.
 
     Combined — ``refine_and_enrich(figures)``  ← RECOMMENDED for route handlers
         Runs both phases in sequence.
@@ -810,24 +829,46 @@ class FigureRefiner:
         self._cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
 
         # BUG-1 FIX: Semaphore is NOT created here — lazy init on first async call.
+        # _llm_semaphore_width tracks the last width so _get_semaphore can detect
+        # when a different batch_count requires a new semaphore (avoids accessing
+        # the private asyncio.Semaphore._value attribute).
         self._llm_semaphore: asyncio.Semaphore | None = None
+        self._llm_semaphore_width: int = 0
 
         # Observability counters
         self._llm_calls:     int = 0
         self._llm_timeouts:  int = 0
         self._cache_hits:    int = 0
         self._cache_misses:  int = 0
-        self._batch_calls:   int = 0   # NEW: total batch LLM calls issued
-        self._batch_errors:  int = 0   # NEW: batches that triggered fallback
+        self._batch_calls:   int = 0
+        self._batch_errors:  int = 0
 
-    def _get_semaphore(self) -> asyncio.Semaphore:
+    def _get_semaphore(self, batch_count: int | None = None) -> asyncio.Semaphore:
         """Return (or lazily create) the concurrency semaphore.
 
-        BUG-1 FIX: Called inside async methods so the event loop is always
-        running when the Semaphore is constructed.
+        BUG-1 FIX retained: called inside async methods so the event loop exists.
+
+        PERF-6: When batch_count is supplied the semaphore width is capped to
+        min(batch_count, _LLM_MAX_CONCURRENT) so we never pre-allocate slots
+        for batches that don't exist.  For example, 2 batches from 10 figures
+        need width=2, not width=4 — both are functionally identical but the
+        tighter width makes the concurrency contract explicit.
+
+        Args:
+            batch_count: Number of batches about to be dispatched.  Pass None
+                         to use the global _LLM_MAX_CONCURRENT cap directly.
+
+        Returns:
+            An asyncio.Semaphore sized to min(batch_count, _LLM_MAX_CONCURRENT).
         """
-        if self._llm_semaphore is None:
-            self._llm_semaphore = asyncio.Semaphore(_LLM_MAX_CONCURRENT)
+        width = (
+            min(batch_count, _LLM_MAX_CONCURRENT)
+            if batch_count is not None
+            else _LLM_MAX_CONCURRENT
+        )
+        if self._llm_semaphore is None or self._llm_semaphore_width != width:
+            self._llm_semaphore = asyncio.Semaphore(width)
+            self._llm_semaphore_width = width
         return self._llm_semaphore
 
     # ------------------------------------------------------------------
@@ -860,12 +901,12 @@ class FigureRefiner:
         batch_figures: list[dict[str, Any]],
         llm: Any,
         fallback_llm: Any = None,
+        batch_count: int | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Acquire the concurrency semaphore then call ``_enrich_batch``.
 
-        This mirrors the old ``_enrich_one_limited`` pattern but operates on
-        an entire batch, honouring the ``_LLM_MAX_CONCURRENT`` semaphore so
-        at most that many batch calls run in parallel.
+        Operates on an entire batch, honouring the ``_LLM_MAX_CONCURRENT``
+        semaphore so at most that many batch calls run in parallel.
 
         Args:
             batch_figures: Subset of Phase 7.4.1 figures to enrich together.
@@ -873,11 +914,13 @@ class FigureRefiner:
             fallback_llm:  Secondary callable LLM instance (GeminiLLM).
                            Used when the primary call fails or returns a
                            low-quality batch.  ``None`` disables fallback.
+            batch_count:   Total number of batches being dispatched in this
+                           call — used to right-size the semaphore (PERF-6).
 
         Returns:
             ``{fig_id: enrichment_dict}`` for every figure in *batch_figures*.
         """
-        async with self._get_semaphore():
+        async with self._get_semaphore(batch_count):
             return await self._enrich_batch(
                 batch_figures, llm, fallback_llm=fallback_llm
             )
@@ -911,8 +954,7 @@ class FigureRefiner:
         Returns:
             ``{fig_id: enrichment_dict}`` — always one entry per input figure.
         """
-        batch_ids = [f.get("id", "") for f in batch_figures]
-        # Minimal batch representation for the prompt (id + clean_caption only)
+        batch_ids  = [f.get("id", "") for f in batch_figures]
         batch_input = [
             {"id": f.get("id", ""), "clean_caption": f.get("clean_caption", "")}
             for f in batch_figures
@@ -927,8 +969,8 @@ class FigureRefiner:
         # ── STEP 1: Try primary LLM (Groq) ───────────────────────────────────
         logger.info("_enrich_batch: [Using GROQ] batch=%s", batch_ids)
 
-        raw_response: str | None = None
-        primary_failed: bool     = False
+        raw_response:   str | None = None
+        primary_failed: bool       = False
 
         for attempt in range(_LLM_RETRY_ATTEMPTS):
             try:
@@ -944,8 +986,7 @@ class FigureRefiner:
                     "_enrich_batch: GROQ response batch=%s (%d chars)",
                     batch_ids, len(raw_response or ""),
                 )
-                # Brief courtesy pause to avoid hammering rate limits
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.1)   # PERF-3: reduced from 0.5
                 break  # ── Groq success ──────────────────────────────────────
 
             except asyncio.TimeoutError:
@@ -985,13 +1026,12 @@ class FigureRefiner:
         if not primary_failed:
             if raw_response is None:
                 logger.warning(
-                    "_enrich_batch: GROQ returned None response for batch=%s — "
+                    "_enrich_batch: GROQ returned None for batch=%s — "
                     "will attempt Gemini fallback.",
                     batch_ids,
                 )
                 needs_fallback = True
             else:
-                # Parse the response; then quality-gate it.
                 enrichment_map = _parse_batch_response(raw_response, batch_figures)
 
                 if _is_bad_batch(enrichment_map):
@@ -1003,7 +1043,6 @@ class FigureRefiner:
                     )
                     needs_fallback = True
                 else:
-                    # ── Groq succeeded and quality is acceptable ───────────────
                     for fig_id, enrichment in enrichment_map.items():
                         logger.debug(
                             "_enrich_batch: GROQ fig='%s' → type='%s' importance='%s' "
@@ -1015,7 +1054,6 @@ class FigureRefiner:
 
         # ── STEP 2: Fallback → Gemini ─────────────────────────────────────────
         if fallback_llm is None:
-            # Fallback disabled (no Gemini client available)
             logger.error(
                 "_enrich_batch: GROQ failed and no fallback LLM configured — "
                 "using safe fallbacks for batch=%s.",
@@ -1040,7 +1078,7 @@ class FigureRefiner:
                 "_enrich_batch: GEMINI response batch=%s (%d chars)",
                 batch_ids, len(gemini_response or ""),
             )
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.1)
 
             gemini_map = _parse_batch_response(gemini_response, batch_figures)
 
@@ -1082,22 +1120,25 @@ class FigureRefiner:
     ) -> list[dict[str, Any]]:
         """Enrich Phase 7.4.1-refined figures with batched LLM semantic analysis.
 
-        NEW FLOW (vs single-figure v1):
+        Flow:
           1. Resolve cache — figures whose clean_caption is already cached skip
              the LLM entirely.
-          2. Create batches — remaining cache-miss figures are grouped into
-             batches of _BATCH_SIZE using _create_batches().
-          3. Process batches — all batches are dispatched concurrently via
-             asyncio.gather(); the semaphore caps concurrency at
-             _LLM_MAX_CONCURRENT (default 2).
-          4. Store cache — each result in every batch response is written to the
+          2. Fast-path — figures with no usable caption get _safe_enrichment()
+             immediately without entering the batch queue (PERF-7).
+          3. Create batches — remaining cache-miss figures with captions are
+             grouped into batches of _BATCH_SIZE using _create_batches().
+          4. Process batches — all batches are dispatched concurrently via
+             asyncio.gather(); the semaphore is sized to
+             min(batch_count, _LLM_MAX_CONCURRENT) (PERF-6).
+          5. Store cache — each result in every batch response is written to the
              LRU cache (evicting oldest entry when _CACHE_SIZE_LIMIT is reached).
-          5. Merge — enrichment is applied to the original figure dicts and the
+          6. Merge — enrichment is applied to the original figure dicts and the
              full list is returned in the original input order.
 
         Error isolation:
-          If a batch fails after all retries, safe fallback enrichment is used
-          for that batch only.  Other batches and all cache hits are unaffected.
+          If a batch fails after all retries AND Gemini fallback, safe fallback
+          enrichment is used for that batch only.  Other batches and all cache
+          hits are unaffected.
 
         Args:
             figures: Phase 7.4.1-refined figure dicts.
@@ -1121,33 +1162,32 @@ class FigureRefiner:
             )
             return figures
 
-        # ── Load Gemini fallback (best-effort; pipeline continues if unavailable) ──
+        # ── Load Gemini fallback (best-effort; pipeline continues if unavailable)
         fallback_llm: Any = None
         if self._llm_model != "gemini":
             try:
                 fallback_llm = get_llm("gemini")
-                logger.info("enrich_with_llm: Gemini fallback LLM loaded successfully.")
+                logger.info("enrich_with_llm: Gemini fallback LLM loaded.")
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    "enrich_with_llm: could not load Gemini fallback LLM: %s — "
+                    "enrich_with_llm: Gemini fallback unavailable: %s — "
                     "multi-model fallback disabled for this run.",
                     exc,
                 )
 
         logger.info(
-            "enrich_with_llm: starting batched enrichment for %d figures "
-            "(cache_size=%d, batch_size=%d)",
-            len(figures), len(self._cache), _BATCH_SIZE,
+            "enrich_with_llm: starting enrichment for %d figures "
+            "(cache_size=%d, batch_size=%d, max_concurrent=%d)",
+            len(figures), len(self._cache), _BATCH_SIZE, _LLM_MAX_CONCURRENT,
         )
 
         # ── Step 1: Resolve cache ─────────────────────────────────────────────
-        # Pre-compute cache keys once; split figures into hits and misses.
         cache_keys: dict[str, str] = {
             f.get("id", ""): _caption_hash((f.get("clean_caption") or "").strip())
             for f in figures
         }
 
-        cached_enrichments: dict[str, dict[str, Any]] = {}   # id → enrichment
+        cached_enrichments: dict[str, dict[str, Any]] = {}
         uncached_figures:   list[dict[str, Any]]       = []
 
         for fig in figures:
@@ -1167,26 +1207,46 @@ class FigureRefiner:
                 uncached_figures.append(fig)
 
         logger.info(
-            "enrich_with_llm: cache_hits=%d cache_misses=%d uncached_figures=%d",
+            "enrich_with_llm: cache_hits=%d  cache_misses=%d  uncached=%d",
             len(cached_enrichments), len(uncached_figures), len(uncached_figures),
         )
 
-        # ── Step 2: Create batches from cache-miss figures ────────────────────
+        # ── Step 2: Fast path — no-caption figures skip LLM (PERF-7) ─────────
         all_enrichments: dict[str, dict[str, Any]] = dict(cached_enrichments)
 
-        if uncached_figures:
-            batches = _create_batches(uncached_figures)
-            logger.info(
-                "enrich_with_llm: %d uncached figures → %d batch(es)",
-                len(uncached_figures), len(batches),
+        no_caption_figs = [f for f in uncached_figures if not _needs_llm(f)]
+        llm_figs        = [f for f in uncached_figures if _needs_llm(f)]
+
+        for fig in no_caption_figs:
+            fig_id = fig.get("id", "")
+            all_enrichments[fig_id] = _safe_enrichment(fig)
+            logger.debug(
+                "enrich_with_llm: skipping LLM for fig='%s' (no usable caption)",
+                fig_id,
             )
 
-            # ── Step 3: Process all batches concurrently (semaphore-limited) ──
-            # BUG-2 pattern: return_exceptions=True so one batch failure cannot
-            # cancel the entire gather.
+        # ── Step 3: Batch + dispatch ──────────────────────────────────────────
+        if llm_figs:
+            batches     = _create_batches(llm_figs)
+            batch_count = len(batches)
+
+            logger.info(
+                "enrich_with_llm: %d figures → %d batch(es) "
+                "(semaphore_width=%d)",
+                len(llm_figs), batch_count,
+                min(batch_count, _LLM_MAX_CONCURRENT),
+            )
+
+            # All batches fire concurrently; semaphore right-sized to batch_count
+            # so we never over-provision slots (PERF-6).
             batch_results = await asyncio.gather(
                 *[
-                    self._enrich_batch_limited(batch, llm, fallback_llm=fallback_llm)
+                    self._enrich_batch_limited(
+                        batch,
+                        llm,
+                        fallback_llm=fallback_llm,
+                        batch_count=batch_count,
+                    )
                     for batch in batches
                 ],
                 return_exceptions=True,
@@ -1195,8 +1255,6 @@ class FigureRefiner:
             # ── Step 4: Store cache + merge batch results ─────────────────────
             for batch_figs, batch_result in zip(batches, batch_results):
                 if isinstance(batch_result, Exception):
-                    # Unexpected coroutine-level exception (not an LLM error —
-                    # those are handled inside _enrich_batch).  Use safe fallbacks.
                     logger.error(
                         "enrich_with_llm: unexpected exception from batch %s: %s — "
                         "using safe fallbacks for that batch.",
