@@ -1,40 +1,64 @@
 // src/components/figure/FigureToolbar.jsx
-// Phase 7.3 — Search (debounce-ready), expanded filters, sort direction badge,
-//             result count display.
+// UPDATED — Phase 7.3.B: importance filter group, multi-key sort cycling.
+// Props added: importanceFilter, onImportanceFilter, sortBy (replaces sortAsc).
+// All existing props kept — FigureExplorer.jsx needs to pass the new ones.
 
 export default function FigureToolbar({
   search,
   onSearch,
   filter,
   onFilter,
+  // NEW — importance filter: "all" | "high" | "medium" | "low"
+  importanceFilter = "all",
+  onImportanceFilter,
+  // UPDATED — sortBy: "page" | "confidence" | "importance"  (replaces sortAsc bool)
+  sortBy = "page",
   onSort,
-  sortAsc = true,
   resultCount = null,
   totalCount  = null,
 }) {
-  const FILTERS = [
-    { value: "all",        label: "All" },
-    { value: "diagram",    label: "Diagrams" },
-    { value: "chart",      label: "Charts" },
-    { value: "graph",      label: "Graphs" },
+  // ── Filter definitions ──────────────────────────────────────────────────
+
+  const TYPE_FILTERS = [
+    { value: "all",        label: "All"         },
+    { value: "graph",      label: "Graphs"      },
+    { value: "diagram",    label: "Diagrams"    },
+    { value: "chart",      label: "Charts"      },
     { value: "comparison", label: "Comparisons" },
+    { value: "image",      label: "Images"      },
   ];
 
-  // Show result count only when a search/filter is active and data has loaded
+  // NEW
+  const IMPORTANCE_FILTERS = [
+    { value: "all",    label: "Any"    },
+    { value: "high",   label: "High"   },
+    { value: "medium", label: "Med"    },
+    { value: "low",    label: "Low"    },
+  ];
+
+  // NEW — sort cycle order + display labels
+  const SORT_MODES = [
+    { value: "page",       label: "Page",       icon: "↕" },
+    { value: "confidence", label: "Confidence", icon: "◉" },
+    { value: "importance", label: "Priority",   icon: "▲" },
+  ];
+  const currentSort = SORT_MODES.find((m) => m.value === sortBy) ?? SORT_MODES[0];
+
   const showCount =
     resultCount !== null &&
     totalCount  !== null &&
-    (search.trim() !== "" || filter !== "all");
+    (search.trim() !== "" || filter !== "all" || importanceFilter !== "all");
 
   return (
     <div className="fig-toolbar">
-      {/* ── Search ── */}
+
+      {/* ── Search ── (unchanged internals) */}
       <div className="fig-toolbar-search-wrap">
         <span className="fig-toolbar-search-icon">🔍</span>
         <input
           className="fig-toolbar-search"
           type="text"
-          placeholder="Search by ID or caption…"
+          placeholder="Search title or description…"
           value={search}
           onChange={(e) => onSearch(e.target.value)}
           spellCheck={false}
@@ -51,9 +75,9 @@ export default function FigureToolbar({
         )}
       </div>
 
-      {/* ── Filter pills ── */}
+      {/* ── Type filter pills (unchanged) ── */}
       <div className="fig-toolbar-filters">
-        {FILTERS.map((f) => (
+        {TYPE_FILTERS.map((f) => (
           <button
             key={f.value}
             className={`fig-filter-pill${filter === f.value ? " fig-filter-pill--active" : ""}`}
@@ -65,7 +89,26 @@ export default function FigureToolbar({
         ))}
       </div>
 
-      {/* ── Right-side controls ── */}
+      {/* NEW — Divider between filter groups */}
+      <div className="fig-toolbar-divider" aria-hidden="true" />
+
+      {/* NEW — Importance filter group */}
+      <div className="fig-toolbar-filters fig-toolbar-filters--importance">
+        {IMPORTANCE_FILTERS.map((f) => (
+          <button
+            key={f.value}
+            className={`fig-filter-pill fig-filter-pill--importance${
+              importanceFilter === f.value ? " fig-filter-pill--imp-active fig-filter-pill--imp-active--" + f.value : ""
+            }`}
+            onClick={() => onImportanceFilter?.(f.value)}
+            aria-pressed={importanceFilter === f.value}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Right side ── */}
       <div className="fig-toolbar-right">
         {showCount && (
           <span className="fig-result-count">
@@ -73,16 +116,15 @@ export default function FigureToolbar({
           </span>
         )}
 
+        {/* UPDATED — cycles through sort modes on click */}
         <button
           className="fig-sort-btn"
           onClick={onSort}
-          title={`Sort by page — ${sortAsc ? "ascending" : "descending"}`}
-          aria-label={`Sort figures by page ${sortAsc ? "ascending" : "descending"}`}
+          title="Cycle sort: Page → Confidence → Priority"
+          aria-label={`Sort by ${currentSort.label}`}
         >
-          <span className="fig-sort-icon" style={{ display: "inline-block", transition: "transform 200ms ease", transform: sortAsc ? "scaleY(1)" : "scaleY(-1)" }}>
-            ⇅
-          </span>
-          {sortAsc ? "Asc" : "Desc"}
+          <span className="fig-sort-icon">{currentSort.icon}</span>
+          {currentSort.label}
         </button>
       </div>
     </div>

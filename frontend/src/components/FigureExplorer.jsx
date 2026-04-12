@@ -38,6 +38,12 @@ export default function FigureExplorer({ onExplain, onGoToPDF }) {
   const [selectedFig, setSelectedFig] = useState(null);
   const [gridVisible, setGridVisible] = useState(false);
 
+  // ─── STEP 1: Replace sortAsc state with sortBy ───────────────────────────────
+  // REMOVE:   const [sortAsc, setSortAsc] = useState(true);
+  // ADD:
+  const [sortBy,          setSortBy]          = useState("page");        // NEW
+  const [importanceFilter, setImportanceFilter] = useState("all");        // NEW
+
   // Debounce search so we don't re-filter on every keystroke
   const debouncedSearch = useDebounced(search, 280);
 
@@ -67,27 +73,56 @@ export default function FigureExplorer({ onExplain, onGoToPDF }) {
     fetchFigures();
   }, [fetchFigures]);
 
-  // ── Filter + sort ─────────────────────────────────────────────────────────
+// ─── STEP 2: Update the filtered useMemo ────────────────────────────────────
+// Replace the existing .filter + .sort chain with:
+ 
   const filtered = useMemo(() => {
     const q = debouncedSearch.trim().toLowerCase();
-
+ 
     return figures
       .filter((f) => {
-        const matchesFilter =
-          filter === "all" || f.type === filter;
-
+        // Type filter (unchanged)
+        const matchesType = filter === "all" || f.type === filter;
+ 
+        // NEW — importance filter
+        const matchesImportance =
+          importanceFilter === "all" || f.importance === importanceFilter;
+ 
+        // UPDATED — search across title + description + id + page
         const matchesSearch =
           !q ||
-          (f.caption ?? "").toLowerCase().includes(q) ||
-          String(f.id ?? "").toLowerCase().includes(q) ||
+          (f.title       ?? f.id      ?? "").toLowerCase().includes(q) ||
+          (f.description ?? f.caption ?? "").toLowerCase().includes(q) ||
+          String(f.id   ?? "").toLowerCase().includes(q)               ||
           String(f.page ?? "").includes(q);
-
-        return matchesFilter && matchesSearch;
+ 
+        return matchesType && matchesImportance && matchesSearch;
       })
-      .sort((a, b) =>
-        sortAsc ? (a.page ?? 0) - (b.page ?? 0) : (b.page ?? 0) - (a.page ?? 0)
-      );
-  }, [figures, debouncedSearch, filter, sortAsc]);
+      .sort((a, b) => {
+        // NEW — multi-key sort
+        if (sortBy === "confidence") {
+          const ca = a.confidence ?? -1;
+          const cb = b.confidence ?? -1;
+          return cb - ca;                          // desc — highest confidence first
+        }
+        if (sortBy === "importance") {
+          const ORDER = { high: 0, medium: 1, low: 2 };
+          return (ORDER[a.importance] ?? 1) - (ORDER[b.importance] ?? 1);
+        }
+        // default: page asc
+        return (a.page ?? 0) - (b.page ?? 0);
+      });
+  }, [figures, debouncedSearch, filter, importanceFilter, sortBy]);
+
+
+  // ─── STEP 3: Sort handler cycles through modes ───────────────────────────────
+  function handleSortCycle() {
+    setSortBy((prev) => {
+      if (prev === "page")       return "confidence";
+      if (prev === "confidence") return "importance";
+      return "page";
+    });
+  }
 
   // ── Keyboard navigation (← →) in modal ───────────────────────────────────
   useEffect(() => {
@@ -128,14 +163,15 @@ export default function FigureExplorer({ onExplain, onGoToPDF }) {
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="fig-explorer">
-      {/* Toolbar */}
       <FigureToolbar
         search={search}
         onSearch={setSearch}
         filter={filter}
         onFilter={setFilter}
-        onSort={() => setSortAsc((v) => !v)}
-        sortAsc={sortAsc}
+        importanceFilter={importanceFilter}          
+        onImportanceFilter={setImportanceFilter}     
+        onSort={handleSortCycle}                     
+        sortBy={sortBy}                              
         resultCount={loading ? null : filtered.length}
         totalCount={loading ? null : figures.length}
       />
