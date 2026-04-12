@@ -1,10 +1,11 @@
 // src/components/figure/FigureModal.jsx
-// UPDATED — Phase 7.3.B: left/right split layout, detail panel, collapsible caption,
-//           confidence bar, new field support. All existing props kept.
+// UPDATED — Phase 7.3.C
+// Tasks: T6 dark centered img bg · T7 hover zoom · T8 badge spacing ·
+//        T9 description readability · T10 caption UX · T11 button hierarchy ·
+//        T12 enhanced nav arrows
 
 import { useEffect, useState } from "react";
 
-// UPDATED — includes image type
 const TYPE_LABEL = {
   graph:      "◈ Graph",
   diagram:    "⬡ Diagram",
@@ -13,11 +14,10 @@ const TYPE_LABEL = {
   image:      "◫ Image",
 };
 
-// NEW — importance display config
 const IMPORTANCE_CONFIG = {
-  high:   { label: "High Priority",   cls: "fig-importance-badge--high"   },
-  medium: { label: "Medium",          cls: "fig-importance-badge--medium" },
-  low:    { label: "Low",             cls: "fig-importance-badge--low"    },
+  high:   { label: "High Priority", cls: "fig-importance-badge--high"   },
+  medium: { label: "Medium",        cls: "fig-importance-badge--medium" },
+  low:    { label: "Low",           cls: "fig-importance-badge--low"    },
 };
 
 export default function FigureModal({
@@ -30,57 +30,49 @@ export default function FigureModal({
   currentIndex,
   totalCount,
 }) {
-  const [imgLoaded,      setImgLoaded]      = useState(false);
-  const [imgError,       setImgError]       = useState(false);
-  // NEW — collapsible caption section
-  const [captionOpen,    setCaptionOpen]    = useState(false);
+  const [imgLoaded,   setImgLoaded]   = useState(false);
+  const [imgError,    setImgError]    = useState(false);
+  const [captionOpen, setCaptionOpen] = useState(false);
+  // NEW T7 — track hover on image for zoom
+  const [imgHovered,  setImgHovered]  = useState(false);
 
-  // Reset states on figure change
   useEffect(() => {
     setImgLoaded(false);
     setImgError(false);
     setCaptionOpen(false);
+    setImgHovered(false);
   }, [figure?.id]);
 
-  // ESC to close
   useEffect(() => {
-    function onKey(e) {
-      if (e.key === "Escape") onClose?.();
-    }
+    const onKey = (e) => { if (e.key === "Escape") onClose?.(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
   if (!figure) return null;
 
-  // UPDATED — support both old + new field shapes
   const {
     id,
     image         = figure.image_url,
     caption,
-    clean_caption,              // NEW — cleaner version of caption if available
+    clean_caption,
     page,
     type,
-    title         = id,         // NEW
-    description   = caption,    // NEW
-    importance    = "medium",   // NEW
-    confidence,                 // NEW
+    title         = id,
+    description   = caption,
+    importance    = "medium",
+    confidence,
   } = figure;
 
   const badgeLabel    = TYPE_LABEL[type] ?? "◈ Figure";
   const importanceCfg = IMPORTANCE_CONFIG[importance] ?? IMPORTANCE_CONFIG.medium;
   const showCounter   = typeof currentIndex === "number" && typeof totalCount === "number";
-
-  // NEW — normalise confidence 0-1 or 0-100 → integer percent
-  const confPct =
-    confidence == null
-      ? null
-      : confidence <= 1
-        ? Math.round(confidence * 100)
-        : Math.round(confidence);
-
-  // Use clean_caption if available, fall back to caption
   const displayCaption = clean_caption || caption;
+
+  const confPct =
+    confidence == null ? null
+    : confidence <= 1  ? Math.round(confidence * 100)
+    :                    Math.round(confidence);
 
   return (
     <div
@@ -90,25 +82,20 @@ export default function FigureModal({
       aria-modal="true"
       aria-label={title || caption}
     >
-      {/* NEW — wider two-column container */}
-      <div
-        className="fig-modal fig-modal--split"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="fig-modal fig-modal--split" onClick={(e) => e.stopPropagation()}>
 
-        {/* ══════════════════════════════════════════
-            LEFT — Image (60%)
-            ══════════════════════════════════════════ */}
+        {/* ════════════════════════════════════════════
+            LEFT — Image panel (60%)
+            ════════════════════════════════════════════ */}
+        {/* UPDATED T6 — dark #0f0f0f bg, flex-centered */}
         <div className="fig-modal-left">
 
-          {/* Counter badge top-left */}
           {showCounter && (
             <span className="fig-modal-left-counter">
               {currentIndex + 1} / {totalCount}
             </span>
           )}
 
-          {/* Image area */}
           <div className="fig-modal-img-wrap">
 
             {!imgLoaded && !imgError && (
@@ -124,21 +111,29 @@ export default function FigureModal({
               </div>
             )}
 
+            {/* UPDATED T7 — zoom on hover via inline transform */}
             {!imgError && (
               <img
                 src={image}
                 alt={title || caption}
                 className="fig-modal-img"
-                style={{ opacity: imgLoaded ? 1 : 0, transition: "opacity 300ms ease" }}
-                onLoad={() => setImgLoaded(true)}
+                style={{
+                  opacity:   imgLoaded ? 1 : 0,
+                  transform: imgHovered ? "scale(1.03)" : "scale(1)",
+                  transition: "opacity 300ms ease, transform 320ms ease",
+                  cursor: "zoom-in",
+                }}
+                onLoad={()  => setImgLoaded(true)}
                 onError={() => { setImgError(true); setImgLoaded(false); }}
+                onMouseEnter={() => setImgHovered(true)}
+                onMouseLeave={() => setImgHovered(false)}
               />
             )}
 
-            {/* Prev / Next arrows */}
+            {/* UPDATED T12 — enhanced nav arrows: larger, always visible on hover */}
             {onPrev && (
               <button
-                className="fig-modal-nav fig-modal-nav--prev"
+                className="fig-modal-nav fig-modal-nav--prev fig-modal-nav--enhanced"
                 onClick={(e) => { e.stopPropagation(); onPrev(); }}
                 aria-label="Previous figure"
                 title="Previous (←)"
@@ -148,7 +143,7 @@ export default function FigureModal({
             )}
             {onNext && (
               <button
-                className="fig-modal-nav fig-modal-nav--next"
+                className="fig-modal-nav fig-modal-nav--next fig-modal-nav--enhanced"
                 onClick={(e) => { e.stopPropagation(); onNext(); }}
                 aria-label="Next figure"
                 title="Next (→)"
@@ -158,35 +153,28 @@ export default function FigureModal({
             )}
           </div>
 
-          {/* KB hint at bottom of left panel */}
           {totalCount > 1 && (
             <p className="fig-modal-kb-hint">← → navigate · ESC close</p>
           )}
         </div>
 
-        {/* ══════════════════════════════════════════
+        {/* ════════════════════════════════════════════
             RIGHT — Detail panel (40%)
-            ══════════════════════════════════════════ */}
+            ════════════════════════════════════════════ */}
         <div className="fig-modal-right">
 
-          {/* Close button */}
-          <button
-            className="fig-modal-close"
-            onClick={onClose}
-            aria-label="Close modal"
-          >
+          <button className="fig-modal-close" onClick={onClose} aria-label="Close modal">
             ×
           </button>
 
-          {/* Scrollable content area */}
           <div className="fig-modal-right-scroll">
 
-            {/* ── Section 1: Title ── */}
+            {/* Section 1 — Title */}
             <div className="fig-modal-section">
               <p className="fig-modal-title">{title || id}</p>
             </div>
 
-            {/* ── Section 2: Badges row ── */}
+            {/* Section 2 — Badges  UPDATED T8: padding-top added via CSS */}
             <div className="fig-modal-section fig-modal-badges-row">
               <span className={`fig-type-badge fig-type-badge--${type ?? "graph"} fig-type-badge--inline`}>
                 {badgeLabel}
@@ -196,7 +184,7 @@ export default function FigureModal({
               </span>
             </div>
 
-            {/* ── Section 3: Description ── */}
+            {/* Section 3 — Description  UPDATED T9 */}
             {description && (
               <div className="fig-modal-section">
                 <p className="fig-modal-section-label">Description</p>
@@ -204,7 +192,7 @@ export default function FigureModal({
               </div>
             )}
 
-            {/* ── Section 4: Caption (collapsible) ── */}
+            {/* Section 4 — Caption (collapsible)  UPDATED T10 */}
             {displayCaption && (
               <div className="fig-modal-section">
                 <button
@@ -212,29 +200,37 @@ export default function FigureModal({
                   onClick={() => setCaptionOpen((v) => !v)}
                   aria-expanded={captionOpen}
                 >
-                  <span className="fig-modal-section-label">Caption</span>
-                  <span
-                    className="fig-modal-collapse-icon"
-                    style={{
-                      transform: captionOpen ? "rotate(180deg)" : "rotate(0deg)",
-                      transition: "transform 200ms ease",
-                    }}
-                  >
-                    ▾
+                  {/* UPDATED T10 — label includes indicator icon + hover underline */}
+                  <span className="fig-modal-section-label fig-modal-caption-label">
+                    <span
+                      className="fig-modal-collapse-chevron"
+                      style={{
+                        display: "inline-block",
+                        transition: "transform 200ms ease",
+                        transform: captionOpen ? "rotate(180deg)" : "rotate(0deg)",
+                        marginRight: 5,
+                      }}
+                    >
+                      ▾
+                    </span>
+                    Caption
                   </span>
+                  {/* UPDATED T10 — peek text when collapsed */}
+                  {!captionOpen && (
+                    <span className="fig-modal-caption-peek">
+                      {displayCaption.slice(0, 38)}{displayCaption.length > 38 ? "…" : ""}
+                    </span>
+                  )}
                 </button>
 
-                {/* NEW — collapsible body */}
-                <div
-                  className="fig-modal-collapse-body"
-                  style={{ display: captionOpen ? "block" : "none" }}
-                >
+                {/* UPDATED T10 — animated expand using max-height */}
+                <div className={`fig-modal-collapse-body${captionOpen ? " fig-modal-collapse-body--open" : ""}`}>
                   <p className="fig-modal-caption">{displayCaption}</p>
                 </div>
               </div>
             )}
 
-            {/* ── Section 5: Metadata row ── */}
+            {/* Section 5 — Metadata */}
             <div className="fig-modal-section fig-modal-meta-row">
               <div className="fig-modal-meta-chip">
                 <span className="fig-modal-meta-label">Page</span>
@@ -246,7 +242,7 @@ export default function FigureModal({
                   <span className="fig-modal-meta-label">Confidence</span>
                   <div className="fig-modal-conf-wrap">
                     <div
-                      className="fig-card-conf-bar"                  /* reuse card bar class */
+                      className="fig-card-conf-bar"
                       style={{ "--conf-pct": `${confPct}%` }}
                       aria-label={`Confidence: ${confPct}%`}
                     />
@@ -256,25 +252,28 @@ export default function FigureModal({
               )}
             </div>
 
-            {/* ── Section 6: Actions ── */}
+            {/* Section 6 — Actions  UPDATED T11: primary/secondary hierarchy */}
             <div className="fig-modal-section fig-modal-actions">
+              {/* T11 PRIMARY — filled amber, glowing */}
               <button
-                className="fig-modal-btn fig-modal-btn--explain"
+                className="fig-modal-btn fig-modal-btn--explain fig-modal-btn--primary"
                 onClick={() => onExplain?.(id)}
               >
                 ✦ Explain with AI
               </button>
+              {/* T11 SECONDARY — outline/ghost */}
               <button
-                className="fig-modal-btn fig-modal-btn--goto"
+                className="fig-modal-btn fig-modal-btn--goto fig-modal-btn--secondary"
                 onClick={() => onGoToPDF?.(page)}
               >
                 ↗ Go to PDF
               </button>
             </div>
 
-          </div>{/* end scroll */}
-        </div>{/* end right */}
-      </div>{/* end fig-modal--split */}
+          </div>
+        </div>
+
+      </div>
     </div>
   );
 }

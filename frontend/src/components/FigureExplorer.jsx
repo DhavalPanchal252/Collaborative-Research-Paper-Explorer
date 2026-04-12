@@ -43,6 +43,7 @@ export default function FigureExplorer({ onExplain, onGoToPDF }) {
   // ADD:
   const [sortBy,          setSortBy]          = useState("page");        // NEW
   const [importanceFilter, setImportanceFilter] = useState("all");        // NEW
+  const [sortDir, setSortDir] = useState("asc");      // NEW T3
 
   // Debounce search so we don't re-filter on every keystroke
   const debouncedSearch = useDebounced(search, 280);
@@ -99,20 +100,18 @@ export default function FigureExplorer({ onExplain, onGoToPDF }) {
         return matchesType && matchesImportance && matchesSearch;
       })
       .sort((a, b) => {
-        // NEW — multi-key sort
+        let cmp = 0;
         if (sortBy === "confidence") {
-          const ca = a.confidence ?? -1;
-          const cb = b.confidence ?? -1;
-          return cb - ca;                          // desc — highest confidence first
+          cmp = (b.confidence ?? -1) - (a.confidence ?? -1);
+        } else if (sortBy === "importance") {
+          const ORD = { high: 0, medium: 1, low: 2 };
+          cmp = (ORD[a.importance] ?? 1) - (ORD[b.importance] ?? 1);
+        } else {
+          cmp = (a.page ?? 0) - (b.page ?? 0);
         }
-        if (sortBy === "importance") {
-          const ORDER = { high: 0, medium: 1, low: 2 };
-          return (ORDER[a.importance] ?? 1) - (ORDER[b.importance] ?? 1);
-        }
-        // default: page asc
-        return (a.page ?? 0) - (b.page ?? 0);
+        return sortDir === "desc" ? -cmp : cmp;
       });
-  }, [figures, debouncedSearch, filter, importanceFilter, sortBy]);
+  }, [figures, debouncedSearch, filter, importanceFilter, sortBy , sortDir]);
 
 
   // ─── STEP 3: Sort handler cycles through modes ───────────────────────────────
@@ -123,6 +122,11 @@ export default function FigureExplorer({ onExplain, onGoToPDF }) {
       return "page";
     });
   }
+
+  function handleSortDirToggle() {                     // NEW T3
+    setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+  }
+ 
 
   // ── Keyboard navigation (← →) in modal ───────────────────────────────────
   useEffect(() => {
@@ -171,7 +175,9 @@ export default function FigureExplorer({ onExplain, onGoToPDF }) {
         importanceFilter={importanceFilter}          
         onImportanceFilter={setImportanceFilter}     
         onSort={handleSortCycle}                     
-        sortBy={sortBy}                              
+        sortBy={sortBy}              
+        sortDir={sortDir}
+        onSortDir={handleSortDirToggle}                
         resultCount={loading ? null : filtered.length}
         totalCount={loading ? null : figures.length}
       />
@@ -216,10 +222,10 @@ export default function FigureExplorer({ onExplain, onGoToPDF }) {
             </p>
             {figures.length > 0 && (
               <button
-                className="fig-retry-btn fig-retry-btn--soft"
-                onClick={() => { setSearch(""); setFilter("all"); }}
+                className="fig-empty-reset-btn"
+                onClick={() => { setSearch(""); setFilter("all"); setImportanceFilter("all"); }}
               >
-                × Clear filters
+                ↺ Reset Filters
               </button>
             )}
           </div>
