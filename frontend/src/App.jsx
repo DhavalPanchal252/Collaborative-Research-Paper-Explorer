@@ -148,6 +148,16 @@ export default function App() {
   const hasPaper = !!uploadedFile;
 
   /* ─── PAPER LOADED ───────────────────────────────────────────────────────── */
+  // ─────────────────────────────────────────────────────────────────
+// App.jsx — ONLY THE CHANGED SECTION (replace the hasPaper return block)
+// TASK 1: Remove sidebar when viewMode === "figures"
+// ─────────────────────────────────────────────────────────────────
+//
+// CHANGE 1: Add data-view attribute to app-paper-body so CSS can hide sidebar.
+// CHANGE 2: FigureExplorer rendered without paper-pdf wrapper — full bleed.
+// Everything else is UNTOUCHED.
+// ─────────────────────────────────────────────────────────────────
+
   if (hasPaper) {
     return (
       <div className="app-paper-layout">
@@ -160,8 +170,10 @@ export default function App() {
           onTabChange={setViewMode}
         />
 
-        <div className="app-paper-body">
-          {/* Sidebar — always visible regardless of view mode */}
+        {/* UPDATED: data-view lets CSS hide sidebar in figures mode */}
+        <div className="app-paper-body" data-view={viewMode}>
+
+          {/* Sidebar — hidden via CSS when viewMode === "figures" */}
           <aside className="sidebar">
             <div className="sidebar-section">
               <p className="section-label">PAPER</p>
@@ -188,16 +200,13 @@ export default function App() {
 
           {/* ── Center panel: mode-switched ── */}
           {viewMode === "figures" ? (
-            // Figure Explorer spans full remaining width (no chat panel beside it)
-            <div className="paper-pdf paper-pdf--full">
-              <FigureExplorer
-                onExplain={handleFigureExplain}
-                onGoToPDF={handleFigureGoToPDF}
-              />
-            </div>
+            // UPDATED: full-bleed — no paper-pdf wrapper needed
+            <FigureExplorer
+              onExplain={handleFigureExplain}
+              onGoToPDF={handleFigureGoToPDF}
+            />
           ) : (
             <>
-              {/* PDF Viewer */}
               <div className="paper-pdf">
                 <PDFViewer
                   file={uploadedFile}
@@ -212,8 +221,6 @@ export default function App() {
                   onDeleteHighlightConsumed={handleDeleteHighlightConsumed}
                 />
               </div>
-
-              {/* Chat */}
               <div className="paper-chat">
                 <ChatPanel
                   model={model}

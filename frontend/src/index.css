@@ -974,6 +974,11 @@ textarea { font-family: inherit; font-size: inherit; }
   min-height: 0; /* critical: lets flex children shrink below content size */
 }
 
+/* TASK 1: Remove sidebar when viewMode === "figures" */
+
+.app-paper-body[data-view="figures"] .sidebar { display: none; }
+.app-paper-body[data-view="figures"] .fig-explorer { flex: 1; }
+
 /* Column 2 — PDF viewer: takes all remaining space between sidebar and chat */
 .paper-pdf {
   flex: 1;
@@ -3477,4 +3482,349 @@ textarea { font-family: inherit; font-size: inherit; }
 }
 [data-theme="light"] .fig-modal-nav:hover {
   background: rgba(255, 255, 255, 0.92);
+}
+/* ════════════════════════════════════════════════════════════════
+   PHASE 7.3.A — Visual Intelligence System (GPT Review Pass)
+   APPEND to END of index.css — do NOT replace anything above.
+   ════════════════════════════════════════════════════════════════ */
+
+
+/* ─── TASK 1: Full-width Figure Explorer (hide sidebar) ──────────── */
+
+.app-paper-body[data-view="figures"] .sidebar {
+  display: none;
+}
+
+.app-paper-body[data-view="figures"] .fig-explorer {
+  flex: 1;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.app-paper-body[data-view="figures"] .fig-grid {
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 22px;
+}
+
+.app-paper-body[data-view="figures"] .fig-grid-area {
+  padding: 28px 36px;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────
+   FIX 1 — TYPE BADGE: stronger, solid, small-caps, readable
+   ───────────────────────────────────────────────────────────────── */
+
+/* UPDATED — base type badge: more solid, bolder */
+.fig-type-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;         /* small-caps feel */
+  padding: 3px 8px;
+  border-radius: 5px;               /* sharper corners → label feel */
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+  z-index: 2;
+  font-variant-numeric: tabular-nums;
+}
+
+/* UPDATED — graph: solid green with visible border */
+.fig-type-badge--graph {
+  background: rgba(76, 175, 125, 0.30);
+  color: #0b2d1b;
+  border: 1.5px solid rgba(76, 175, 125, 0.55);
+}
+
+/* UPDATED — diagram: solid amber */
+.fig-type-badge--diagram {
+  background: rgba(232, 160, 74, 0.28);
+  color: #423521;
+  border: 1.5px solid rgba(232, 160, 74, 0.52);
+}
+
+/* UPDATED — chart: blue-violet */
+.fig-type-badge--chart {
+  background: rgba(130, 120, 220, 0.28);
+  color: #15142e;
+  border: 1.5px solid rgba(130, 120, 220, 0.50);
+}
+
+/* UPDATED — comparison: teal */
+.fig-type-badge--comparison {
+  background: rgba(80, 190, 200, 0.25);
+  color: #1d3a3c;
+  border: 1.5px solid rgba(80, 190, 200, 0.48);
+}
+
+/* UPDATED — image: neutral */
+.fig-type-badge--image {
+  background: rgba(180, 180, 180, 0.18);
+  color: #d0d0d0;
+  border: 1.5px solid rgba(180, 180, 180, 0.36);
+}
+
+/* Light theme — darken all tones */
+[data-theme="light"] .fig-type-badge--graph      { background: rgba(42, 122, 80, 0.14); color: #1a6640; border-color: rgba(42, 122, 80, 0.35); }
+[data-theme="light"] .fig-type-badge--diagram    { background: rgba(181, 114, 26, 0.14); color: #8c5010; border-color: rgba(181, 114, 26, 0.35); }
+[data-theme="light"] .fig-type-badge--chart      { background: rgba(90, 80, 180, 0.12); color: #4a3fa0; border-color: rgba(90, 80, 180, 0.30); }
+[data-theme="light"] .fig-type-badge--comparison { background: rgba(40, 150, 160, 0.12); color: #1a7880; border-color: rgba(40, 150, 160, 0.28); }
+[data-theme="light"] .fig-type-badge--image      { background: rgba(100, 100, 100, 0.10); color: #555; border-color: rgba(100, 100, 100, 0.22); }
+
+
+/* ─────────────────────────────────────────────────────────────────
+   FIX 2 — IMPORTANCE BADGE: glow on HIGH, contrast boost all tiers
+   ───────────────────────────────────────────────────────────────── */
+
+.fig-importance-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 5px;
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* UPDATED — HIGH: red with glow = priority alert signal */
+.fig-importance-badge--high {
+  background: rgba(235, 17, 17, 0.225);
+  color: #360909;
+  border: 1.5px solid rgba(224, 80, 80, 0.55);
+  box-shadow:
+    0 0 8px rgba(224, 80, 80, 0.35),   /* glow */
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+/* UPDATED — MEDIUM: stronger amber contrast */
+.fig-importance-badge--medium {
+  background: rgba(232, 160, 74, 0.22);
+  color: #360909;
+  border: 1.5px solid rgba(232, 160, 74, 0.48);
+}
+
+/* UPDATED — LOW: cleaner green */
+.fig-importance-badge--low {
+  background: rgba(76, 175, 125, 0.20);
+  color: #6dffb3;
+  border: 1.5px solid rgba(76, 175, 125, 0.42);
+}
+
+/* Light theme importance */
+[data-theme="light"] .fig-importance-badge--high   { background: rgba(192, 48, 48, 0.14); color: #b02020; border-color: rgba(192, 48, 48, 0.40); box-shadow: 0 0 6px rgba(192, 48, 48, 0.20); }
+[data-theme="light"] .fig-importance-badge--medium { background: rgba(181, 114, 26, 0.14); color: #8c5010; border-color: rgba(181, 114, 26, 0.38); }
+[data-theme="light"] .fig-importance-badge--low    { background: rgba(42, 122, 80, 0.12); color: #1a6640; border-color: rgba(42, 122, 80, 0.32); }
+
+
+/* ─────────────────────────────────────────────────────────────────
+   FIX 3 — CONFIDENCE BAR: visible gray track, smooth fill, % text
+   ───────────────────────────────────────────────────────────────── */
+
+.fig-card-conf {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 3px;
+}
+
+/* UPDATED — track now visibly gray */
+.fig-card-conf-bar {
+  flex: 1;
+  height: 4px;                        /* slightly taller */
+  border-radius: 99px;
+  background: var(--border);          /* visible gray track */
+  overflow: hidden;
+  position: relative;
+}
+
+/* UPDATED — fill: gradient + smooth entrance animation */
+.fig-card-conf-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--conf-pct, 0%);
+  background: linear-gradient(
+    90deg,
+    var(--accent-dim) 0%,
+    var(--accent)     60%,
+    #ffd08a           100%
+  );
+  border-radius: 99px;
+  animation: conf-fill-in 700ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* NEW — confidence bar entrance animation */
+@keyframes conf-fill-in {
+  from { width: 0%; }
+  to   { width: var(--conf-pct, 0%); }
+}
+
+/* UPDATED — % label: slightly more prominent */
+.fig-card-conf-label {
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────
+   FIX 4 — CARD HEIGHT CONSISTENCY: strict clamp, uniform grid rows
+   ───────────────────────────────────────────────────────────────── */
+
+/* UPDATED — card body: fixed min-height so all cards align */
+.fig-card-body {
+  padding: 11px 14px 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  /* Ensures cards with/without confidence bar still look consistent */
+  min-height: 108px;
+}
+
+/* UPDATED — title: strict 1-line, no wrap */
+.fig-card-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: -0.01em;
+  flex-shrink: 0;
+}
+
+/* UPDATED — description: strict 2-line clamp, fixed height */
+.fig-card-desc {
+  font-size: 11px;
+  color: var(--text-2);
+  line-height: 1.5;
+  /* strict 2-line clamp */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  /* fixed height = 2 lines × 1.5 line-height × 11px */
+  min-height: calc(11px * 1.5 * 2);
+  max-height: calc(11px * 1.5 * 2);
+  word-break: break-word;
+  flex-shrink: 0;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────
+   FIX 5 — HOVER OVERLAY: bottom-up gradient fade (premium feel)
+   ───────────────────────────────────────────────────────────────── */
+
+/* UPDATED — replace flat blur overlay with gradient + two action buttons */
+.fig-card-overlay {
+  position: absolute;
+  inset: 0;
+  /* gradient from dark bottom → transparent top */
+  background: linear-gradient(
+    to top,
+    rgba(0, 0, 0, 0.82) 0%,
+    rgba(0, 0, 0, 0.44) 45%,
+    rgba(0, 0, 0, 0.08) 75%,
+    transparent         100%
+  );
+  display: flex;
+  align-items: flex-end;              /* buttons sit at bottom */
+  justify-content: center;
+  gap: 8px;
+  padding-bottom: 14px;              /* push buttons off the edge */
+  opacity: 0;
+  transition: opacity 200ms ease;
+  /* subtle blur still on buttons area */
+  backdrop-filter: blur(0px);        /* no full-card blur — keeps image readable */
+}
+
+.fig-card:hover .fig-card-overlay {
+  opacity: 1;
+}
+
+/* UPDATED — overlay buttons: cleaner pill style at card bottom */
+.fig-overlay-btn {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 13px;
+  border-radius: 20px;               /* pill */
+  border: 1px solid transparent;
+  letter-spacing: 0.02em;
+  transition: background 140ms ease, transform 100ms ease, box-shadow 140ms ease;
+}
+
+.fig-overlay-btn:active { transform: scale(0.94); }
+
+.fig-overlay-btn--view {
+  background: rgba(0,0,0,0.6);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.30);
+  backdrop-filter: blur(4px);
+}
+.fig-overlay-btn--view:hover {
+  background: rgba(255, 255, 255, 0.28);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.22);
+}
+
+.fig-overlay-btn--explain {
+  background: rgba(232, 160, 74, 0.28);
+  color: #ffc46e;
+  border-color: rgba(232, 160, 74, 0.52);
+  backdrop-filter: blur(4px);
+}
+.fig-overlay-btn--explain:hover {
+  background: rgba(232, 160, 74, 0.42);
+  box-shadow: 0 2px 10px rgba(232, 160, 74, 0.20);
+}
+
+
+/* ─── Hover card lift (updated) ──────────────────────────────────── */
+
+.fig-card:hover {
+  transform: translateY(-4px) scale(1.012);
+  box-shadow:
+    0 14px 40px rgba(0, 0, 0, 0.32),
+    0 0 0 1.5px rgba(232, 160, 74, 0.24);
+  border-color: rgba(232, 160, 74, 0.32);
+}
+
+.fig-card:hover .fig-card-img {
+  transform: scale(1.05);
+}
+
+.fig-card:active {
+  transform: translateY(0) scale(1.004);
+  transition-duration: 70ms;
+}
+
+
+/* ─── Responsive ─────────────────────────────────────────────────── */
+
+@media (max-width: 900px) {
+  .app-paper-body[data-view="figures"] .fig-grid {
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 16px;
+  }
+  .app-paper-body[data-view="figures"] .fig-grid-area {
+    padding: 20px;
+  }
+}
+
+@media (max-width: 560px) {
+  .app-paper-body[data-view="figures"] .fig-grid {
+    grid-template-columns: 1fr;
+  }
 }
