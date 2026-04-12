@@ -118,9 +118,7 @@ export default function FigureToolbar({
         {/* UPDATED T4 — always-visible count; accent colour when filtered */}
         {showCount && (
           <span className={`fig-result-count${isFiltered ? " fig-result-count--active" : ""}`}>
-            {resultCount}
-            <span className="fig-result-count-sep">/</span>
-            {totalCount}
+            Showing <strong>{resultCount}</strong> of {totalCount}
           </span>
         )}
 

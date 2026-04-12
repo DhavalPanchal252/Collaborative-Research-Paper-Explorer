@@ -117,12 +117,13 @@ export default function FigureModal({
 
             {!imgError && (
               <img
+                key={id}
                 src={image}
                 alt={title}
                 className="fig-modal-img"
                 style={{
                   opacity:    imgLoaded ? 1 : 0,
-                  transform:  imgHovered ? "scale(1.03)" : "scale(1)",
+                  transform:  imgHovered ? "scale(1.05)" : "scale(1)",
                   transition: "opacity 300ms ease, transform 320ms ease",
                   cursor:     "zoom-in",
                 }}
