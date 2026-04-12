@@ -3147,9 +3147,9 @@ textarea { font-family: inherit; font-size: inherit; }
 }
 
 .fig-type-badge--image {
-  background: rgba(180, 180, 180, 0.18);
-  color: #d0d0d0;
-  border: 1.5px solid rgba(180, 180, 180, 0.36);
+  background: rgba(157, 51, 163, 0.286);
+  color: #4a0a0a;
+  border: 1.5px solid rgba(104, 13, 80, 0.412);
 }
 
 /* ── Importance badge — top-right ─────────────────── */
@@ -3185,9 +3185,9 @@ textarea { font-family: inherit; font-size: inherit; }
 }
 
 .fig-importance-badge--low {
-  background: rgba(76, 175, 125, 0.20);
-  color: #6dffb3;
-  border: 1.5px solid rgba(76, 175, 125, 0.42);
+  background: rgba(164, 167, 75, 0.486);
+  color: #383811;
+  border: 1.5px solid rgba(66, 72, 14, 0.593);
 }
 
 /* ── Hover overlay — bottom-up gradient ──────────── */
@@ -3871,9 +3871,9 @@ textarea { font-family: inherit; font-size: inherit; }
 .fig-modal-badges-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 20px;
   flex-wrap: wrap;
-  padding-top: 4px;           /* extra breathing room below title section */
+  padding-top: 15px;           /* extra breathing room below title section */
 }
 
 /* Override absolute positioning when badges appear inline in the modal */
@@ -3882,6 +3882,68 @@ textarea { font-family: inherit; font-size: inherit; }
   position: static !important;
   display: inline-flex;
   align-items: center;
+}
+
+/* Enhanced badge visibility in modal */
+.fig-modal-badges-row .fig-importance-badge--high {
+  background: rgba(255, 69, 69, 0.042);
+  color: #ff6b6b;
+  border-color: rgba(255, 107, 107, 0.70);
+  box-shadow: 0 0 5px rgba(255, 69, 69, 0.40);
+}
+
+.fig-modal-badges-row .fig-importance-badge--medium {
+  background: rgba(255, 166, 0, 0.025);
+  color: #ffb347;
+  border-color: rgba(255, 165, 0, 0.65);
+  box-shadow: 0 0 5px rgba(255, 69, 69, 0.40);
+}
+
+.fig-modal-badges-row .fig-importance-badge--low {
+  background: rgba(219, 234, 7, 0.055);
+  color: #f9e005c3;
+  border-color: rgba(176, 194, 76, 0.65);
+  box-shadow: 0 0 5px rgba(255, 69, 69, 0.40);
+}
+
+.fig-modal-badges-row .fig-type-badge--graph {
+  background: rgba(102, 205, 171, 0.075);
+  color: #3dec8a;
+  border-color: rgba(102, 205, 170, 0.75);
+  box-shadow: 0 0 5px rgba(34, 255, 115, 0.451);
+  font-weight: 500;
+}
+
+.fig-modal-badges-row .fig-type-badge--diagram {
+  background: rgba(255, 179, 0, 0.077);
+  color: #ffc439;
+  border-color: rgba(255, 180, 0, 0.75);
+  box-shadow: 0 0 5px rgba(255, 174, 69, 0.4);
+  font-weight: 500;
+}
+
+.fig-modal-badges-row .fig-type-badge--chart {
+  background: rgba(147, 139, 255, 0.088);
+  color: #b8a8ff;
+  border-color: rgba(147, 139, 255, 0.75);
+  box-shadow: 0 0 5px rgba(85, 69, 255, 0.4);
+  font-weight: 500;
+}
+
+.fig-modal-badges-row .fig-type-badge--comparison {
+  background: rgba(100, 211, 255, 0.077);
+  color: #5cd9ff;
+  border-color: rgba(100, 210, 255, 0.75);
+  box-shadow: 0 0 5px rgba(78, 69, 255, 0.4);
+  font-weight: 500;
+}
+
+.fig-modal-badges-row .fig-type-badge--image {
+  background: rgba(200, 100, 220, 0.052);
+  color: #ff8aff;
+  border-color: rgba(200, 100, 220, 0.75);
+  box-shadow: 0 0 5px rgba(255, 69, 249, 0.4);
+  font-weight: 500;
 }
 
 /* Description */

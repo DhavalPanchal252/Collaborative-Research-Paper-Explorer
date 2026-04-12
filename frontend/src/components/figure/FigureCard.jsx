@@ -1,10 +1,10 @@
 // src/components/figure/FigureCard.jsx
-// UPDATED — Phase 7.3.A: Importance badge, title, description, confidence bar.
-// Removed: raw caption clutter, large text blocks.
+// Phase 7.4 — Maps normalised figure shape from figureService.
+// All fallbacks are resolved upstream in normaliseFigure(); card just renders.
 
 import { useState } from "react";
 
-// ── Badge configs ──────────────────────────────────────────────────────────
+// ── Badge configs ────────────────────────────────────────────────────────────
 
 const TYPE_LABEL = {
   graph:      "◈ Graph",
@@ -12,28 +12,38 @@ const TYPE_LABEL = {
   chart:      "◉ Chart",
   comparison: "⇄ Compare",
   image:      "◫ Image",
+  other:      "◈ Figure",
 };
 
-// NEW — importance badge config
 const IMPORTANCE_CONFIG = {
   high:   { label: "High",   cls: "fig-importance-badge--high"   },
   medium: { label: "Medium", cls: "fig-importance-badge--medium" },
   low:    { label: "Low",    cls: "fig-importance-badge--low"    },
 };
 
+// Truncate to ~90 chars for the 2-line preview
+function truncate(str, max = 90) {
+  if (!str) return "";
+  return str.length > max ? str.slice(0, max) + "…" : str;
+}
+
 export default function FigureCard({ figure, onClick, onExplain, animationIndex = 0 }) {
-  // Support both old shape (id, image, caption, page) and new shape
-  // (title, description, image_url, importance, confidence) — graceful fallback
+  // All fields are pre-normalised by figureService.normaliseFigure():
+  //   image       → resolved absolute URL
+  //   type        → lowercase, fallback "graph"
+  //   importance  → lowercase, fallback "medium"
+  //   confidence  → 0-100 integer or null
+  //   title       → raw.title || raw.id
+  //   description → raw.description || raw.clean_caption || raw.caption || ""
   const {
     id,
-    image      = figure.image_url,   // NEW field alias
-    caption,
+    image,
     page,
-    type,
-    title      = id,                 // NEW — bold title line
-    description = caption,           // NEW — short description
-    importance  = "medium",          // NEW — high | medium | low
-    confidence,                      // NEW — 0–1 or 0–100
+    type        = "other",
+    title,
+    description,
+    importance  = "medium",
+    confidence  = null,
   } = figure;
 
   const [imgLoaded, setImgLoaded] = useState(false);
@@ -44,23 +54,9 @@ export default function FigureCard({ figure, onClick, onExplain, animationIndex 
     onExplain?.(id);
   }
 
-  const badgeLabel = TYPE_LABEL[type] ?? "◈ Figure";
-
-  // NEW — normalise confidence to 0-100
-  const confPct =
-    confidence == null
-      ? null
-      : confidence <= 1
-        ? Math.round(confidence * 100)
-        : Math.round(confidence);
-
-  // NEW — truncate description to 2 lines worth (~90 chars)
-  const shortDesc =
-    (description ?? "").length > 90
-      ? description.slice(0, 90) + "…"
-      : description || "";
-
+  const badgeLabel    = TYPE_LABEL[type]       ?? "◈ Figure";
   const importanceCfg = IMPORTANCE_CONFIG[importance] ?? IMPORTANCE_CONFIG.medium;
+  const shortDesc     = truncate(description);
 
   return (
     <div
@@ -69,7 +65,7 @@ export default function FigureCard({ figure, onClick, onExplain, animationIndex 
       role="button"
       tabIndex={0}
       onKeyDown={(e) => e.key === "Enter" && onClick?.(figure)}
-      aria-label={title || caption}
+      aria-label={title}
       style={{ "--card-index": animationIndex }}
     >
       {/* ── Image area ──────────────────────────────────────────────────── */}
@@ -89,22 +85,22 @@ export default function FigureCard({ figure, onClick, onExplain, animationIndex 
         {!imgError && (
           <img
             src={image}
-            alt={title || caption}
+            alt={title}
             className="fig-card-img"
             loading="lazy"
             decoding="async"
             style={{ opacity: imgLoaded ? 1 : 0, transition: "opacity 280ms ease" }}
-            onLoad={() => setImgLoaded(true)}
+            onLoad={()  => setImgLoaded(true)}
             onError={() => { setImgError(true); setImgLoaded(false); }}
           />
         )}
 
         {/* Type badge — top-left */}
-        <span className={`fig-type-badge fig-type-badge--${type ?? "graph"}`}>
+        <span className={`fig-type-badge fig-type-badge--${type}`}>
           {badgeLabel}
         </span>
 
-        {/* NEW — Importance badge — top-right */}
+        {/* Importance badge — top-right */}
         <span className={`fig-importance-badge ${importanceCfg.cls}`}>
           {importanceCfg.label}
         </span>
@@ -126,17 +122,17 @@ export default function FigureCard({ figure, onClick, onExplain, animationIndex 
         </div>
       </div>
 
-      {/* ── Card body ──────────────────────────────────────────────────── */}
+      {/* ── Card body ───────────────────────────────────────────────────── */}
       <div className="fig-card-body">
 
-        {/* NEW — Title (bold, 1 line) */}
-        <p className="fig-card-title">
-          {(title ?? id ?? "Untitled Figure")}
-        </p>
+        {/* Title — bold, 1 line */}
+        <p className="fig-card-title">{title}</p>
 
-        {/* NEW — Short description (2 lines max, replacing raw caption dump) */}
+        {/* Short description — 2 lines max */}
         {shortDesc && (
-          <p className="fig-card-desc">{shortDesc}</p>
+          <p className="fig-card-desc">
+              {shortDesc || "No description available"}
+          </p>
         )}
 
         {/* Meta row: id + page */}
@@ -145,15 +141,15 @@ export default function FigureCard({ figure, onClick, onExplain, animationIndex 
           <span className="fig-card-page">p.{page}</span>
         </div>
 
-        {/* NEW — Confidence bar (only rendered if confidence provided) */}
-        {confPct != null && (
+        {/* Confidence bar — only when confidence > 0 */}
+        {confidence != null && confidence > 0 && (
           <div className="fig-card-conf">
             <div
               className="fig-card-conf-bar"
-              style={{ "--conf-pct": `${confPct}%` }}
-              aria-label={`Confidence: ${confPct}%`}
+              style={{ "--conf-pct": `${confidence}%` }}
+              aria-label={`Confidence: ${confidence}%`}
             />
-            <span className="fig-card-conf-label">{confPct}%</span>
+            <span className="fig-card-conf-label">{confidence}%</span>
           </div>
         )}
       </div>

@@ -1,25 +1,8 @@
 // src/services/figureService.js
-// Phase 7.3 — Figure data fetching layer with full error handling.
+// Phase 7.4 — Backend now returns structured figure data with type, description,
+// importance, quality_score. No client-side inference needed.
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
-
-/**
- * Derives a display type from the figure caption using keyword matching.
- * Backend does not supply a type field, so we infer it client-side.
- *
- * @param {string} caption
- * @returns {"diagram" | "chart" | "comparison" | "graph"}
- */
-function inferType(caption = "") {
-  const c = caption.toLowerCase();
-  if (c.includes("compar") || c.includes("versus") || c.includes(" vs "))
-    return "comparison";
-  if (c.includes("chart") || c.includes("bar") || c.includes("pie"))
-    return "chart";
-  if (c.includes("diagram") || c.includes("architecture") || c.includes("pipeline") || c.includes("flow"))
-    return "diagram";
-  return "graph"; // default
-}
 
 /**
  * Converts a relative static path to a fully-qualified URL.
@@ -29,25 +12,66 @@ function inferType(caption = "") {
  */
 function resolveImageUrl(imageUrl = "") {
   if (!imageUrl) return "";
-  // Already absolute (http/https/data)
   if (/^(https?:\/\/|data:)/.test(imageUrl)) return imageUrl;
   return `${API_BASE}${imageUrl.startsWith("/") ? "" : "/"}${imageUrl}`;
 }
 
 /**
  * Normalises a raw API figure record into a consistent shape used throughout
- * the UI.  Keeps all original fields; adds `image` (resolved URL) and `type`.
+ * the UI. Backend (Phase 7.4) provides: id, title, clean_caption, caption,
+ * type, description, importance, quality_score, confidence, page, image_url.
+ *
+ * Rules applied here so components never need to handle raw API shapes:
+ *  - image        → resolved absolute URL from image_url
+ *  - type         → backend value (lowercase), fallback "graph"
+ *  - confidence   → backend confidence; fall back to quality_score; normalise
+ *                   to 0-100 range (backend may send 0-1 or 0-100)
+ *  - importance   → lowercase; fallback "medium"
+ *  - title        → fallback id
+ *  - description  → fallback clean_caption, then caption
  *
  * @param {object} raw  Raw figure object from the API.
  * @returns {object}    Normalised figure.
  */
 function normaliseFigure(raw) {
+  // ── Resolve image ──────────────────────────────────────────────────────────
+  const image = resolveImageUrl(raw.image_url || "");
+
+  // ── Type — backend provides it directly; guard against missing/wrong case ──
+  const type = (raw.type ?? "other").toLowerCase();
+
+  // ── Importance — lowercase + fallback ─────────────────────────────────────
+  const importance = (raw.importance ?? "medium").toLowerCase();
+
+  // ── Confidence — prefer explicit confidence, fall back to quality_score ───
+  // Normalise to 0-100 integer regardless of whether backend sends 0-1 or 0-100.
+  let confidence = null;
+
+  if (raw.confidence != null) {
+    confidence = Math.round(raw.confidence * 100);
+  } else if (raw.quality_score != null) {
+    confidence = Math.round((raw.quality_score / 3) * 100);
+  }
+
+  // ── Title / description fallbacks ─────────────────────────────────────────
+  const id = raw.id ?? crypto.randomUUID();
+  const title = raw.title?.trim() || id;
+  const description =
+    raw.description?.trim() ||
+    raw.clean_caption?.slice(0, 140) ||
+    raw.caption?.slice(0, 140) ||
+    "";
+
   return {
+    // Spread raw so nothing is lost (clean_caption, caption, etc. stay available)
     ...raw,
-    // Canonical image URL used by <img> tags
-    image: resolveImageUrl(raw.image_url),
-    // Derived display type (diagram / chart / comparison / graph)
-    type: inferType(raw.caption),
+    // Overwrite / add normalised fields
+    image,
+    type,
+    importance,
+    confidence,   // always 0-100 int or null — no further conversion needed in UI
+    title,
+    description,
   };
 }
 
@@ -70,7 +94,7 @@ export async function getFigures(sessionId) {
     res = await fetch(url, {
       method: "GET",
       headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(30_000), // 30 s hard timeout
+      signal: AbortSignal.timeout(30_000),
     });
   } catch (networkErr) {
     if (networkErr.name === "TimeoutError") {
@@ -104,7 +128,7 @@ export async function getFigures(sessionId) {
 
   return {
     sessionId: data.session_id ?? sessionId,
-    total: data.total_figures ?? rawFigures.length,
-    figures: rawFigures.map(normaliseFigure),
+    total:     data.total_figures ?? rawFigures.length,
+    figures:   rawFigures.map(normaliseFigure),
   };
 }
