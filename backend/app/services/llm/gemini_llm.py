@@ -24,7 +24,7 @@ import logging
 import os
 from pathlib import Path
 
-import google.generativeai as genai
+from google import genai
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
@@ -55,24 +55,14 @@ def _get_client() -> genai.GenerativeModel:
         RuntimeError: When GEMINI_API_KEY is absent from the environment.
     """
     api_key = os.getenv("GEMINI_API_KEY")
+    
     if not api_key:
         raise RuntimeError(
             "GEMINI_API_KEY is missing. "
             "Add it to backend/.env or set it as an environment variable."
         )
-    genai.configure(api_key=api_key)
-    return genai.GenerativeModel(
-        model_name=_MODEL,
-        system_instruction=(
-            "You are a helpful, precise AI assistant. "
-            "Follow the instructions in the user message exactly."
-        ),
-        generation_config=genai.types.GenerationConfig(
-            temperature=_TEMPERATURE,
-            max_output_tokens=_MAX_TOKENS,
-        ),
-    )
-
+    
+    return genai.Client(api_key=api_key)
 
 # ---------------------------------------------------------------------------
 # Provider class
@@ -124,32 +114,35 @@ class GeminiLLM:
         logger.debug("Gemini prompt length: %d chars", len(prompt))
 
         try:
-            model    = _get_client()
-            response = model.generate_content(prompt)
+            client = _get_client()
 
-            # Gemini can return candidates with finish_reason != STOP
-            # when safety filters or recitation filters trigger.
-            if not response.candidates:
-                logger.warning(
-                    "Gemini returned no candidates — prompt may have triggered "
-                    "a safety filter."
-                )
+            response = client.models.generate_content(
+                model=_MODEL,
+                contents=prompt,
+                config={
+                    "temperature": _TEMPERATURE,
+                    "max_output_tokens": _MAX_TOKENS,
+                },
+            )
+
+            # Safe extraction
+            text = getattr(response, "text", None)
+
+            if not text:
+                logger.warning("Gemini returned empty response")
                 return "The model returned an empty response."
 
-            answer = response.text
             logger.info(
                 "Gemini response: %d chars | model=%s",
-                len(answer or ""), _MODEL,
+                len(text), _MODEL
             )
-            return answer or "The model returned an empty response."
+
+            return text
 
         except RuntimeError as exc:
-            # Configuration error — log and re-raise; caller must decide
-            # whether to use safe fallbacks.
             logger.error("Gemini config error: %s", exc)
             raise
 
         except Exception as exc:
-            # Network / API / quota error — log and re-raise.
             logger.error("Gemini API error: %s", exc, exc_info=True)
             raise
