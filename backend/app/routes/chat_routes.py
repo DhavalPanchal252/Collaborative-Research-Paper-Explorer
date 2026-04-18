@@ -5,6 +5,7 @@ Chat endpoint with session memory + casual input short-circuit.
 
 Pipeline (per request)
 -----------------------
+
   [casual?] ──yes──► reply immediately, skip retrieval + LLM
       │
       no
