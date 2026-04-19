@@ -114,18 +114,20 @@ _MODE_INSTRUCTIONS: dict[ExplainMode, str] = {
         The reader wants to *understand*, not just be informed.
         Think like a PhD advisor explaining this to a first-year student.
 
-        - Write 3–5 insights. Each insight must answer a different question:
-            Insight 1: What does this figure directly demonstrate?
-            Insight 2: What is surprising, non-obvious, or counterintuitive?
-            Insight 3: What does this imply for the paper's core argument?
-            Insight 4+ (optional): Trade-offs, limitations, or open questions.
-        - summary: 2–3 sentences covering (a) what it shows, (b) why the
-          authors included it, (c) what it proves or supports.
-        - simple_explanation: Restate the core idea as if explaining to
-          someone who has never read a research paper. An analogy helps.
-        - key_takeaway: Distil everything into ONE sentence that would
-          survive being quoted out of context.
-        - Prioritise WHY and SO WHAT over WHAT."""),
+        - Write 3–5 insights. Each must answer a DIFFERENT question:
+            Insight 1: What mechanism or design choice does this figure reveal?
+            Insight 2: What is surprising, non-obvious, or does this refute?
+            Insight 3: What does this prove about the paper's hypothesis?
+            Insight 4+ (optional): Trade-offs, limitations, or generalisability.
+        - summary: 2–3 sentences. NEVER open with 'This figure shows'.
+          Lead with the MECHANISM (why the curves diverge / why method A wins).
+          Then state what it proves about the paper's claim.
+        - simple_explanation: Restate the core MECHANISM in everyday terms.
+          An analogy is encouraged — but ground it in the actual data pattern.
+        - key_takeaway: Distil the MECHANISM into ONE sentence that would
+          survive being quoted out of context. Name the design choice, not just
+          the result.
+        - Prioritise WHY and SO WHAT (mechanism and implication) over WHAT."""),
 
     ExplainMode.SIMPLE: textwrap.dedent("""\
         MODE: PLAIN ENGLISH
@@ -157,12 +159,14 @@ _TYPE_REASONING: dict[FigureType, str] = {
         1. Identify what the X-axis and Y-axis represent — name the quantities
            and their units if stated. Do not skip this.
         2. Describe the shape of the curve(s): monotonic? plateauing?
-           oscillating? diverging?
+           oscillating? diverging? Name which line represents what.
         3. Locate the inflection point or the most significant region.
-           What happens there and why does it matter?
-        4. If multiple lines exist, explain what their separation or
-           convergence tells us — do not just say "A is higher than B".
-        5. State what the trend *implies* for the paper's claim.
+           What happens there and why does it matter? Focus on WHAT CHANGES.
+        4. If multiple lines exist, explain what their separation, convergence,
+           or divergence MEANS mechanically — why does one lead? What causes
+           the gap to widen or narrow? Do not just describe the gap, explain it.
+        5. State the MECHANISM underlying the trend: what design choice,
+           data property, or algorithmic difference causes the observed pattern?
            The trend is evidence; your job is to name what it is evidence of."""),
 
     FigureType.CHART: textwrap.dedent("""\
@@ -253,25 +257,34 @@ _TYPE_REASONING_FALLBACK: str = textwrap.dedent("""\
 _ANTI_PATTERNS: str = textwrap.dedent("""\
     ANTI-PATTERNS — outputs like these will be rejected:
 
-    BAD summary (generic opener):
-      "This figure shows the performance of the proposed method across..."
-    GOOD summary (leads with finding):
-      "The proposed model achieves a 12% accuracy gain over baselines on
-       the hardest split, with the gap widening as training data grows."
+    BAD summary (meta-commentary, generic openers):
+      "This figure shows..." "The figure illustrates..." "The figure
+       demonstrates..." "In this figure, we see..." "As shown here..."
+    GOOD summary (mechanism-first, no meta-commentary):
+      "Normalizing contrast at each layer helps the IN model separate
+       style from content — the widening gap against BN proves this
+       architectural choice scales better as training data grows."
 
-    BAD insight (restates the caption):
+    BAD insight (restates caption, no interpretation):
       "The figure presents encoder and decoder components connected by
        cross-attention layers."
-    GOOD insight (adds interpretation):
+    GOOD insight (mechanism + implication):
       "Inserting cross-attention at every block, rather than only at the
        final layer, lets the model course-correct domain shift incrementally —
        this is the architectural bet the paper is making."
 
-    BAD key_takeaway (vague):
+    BAD key_takeaway (vague, could apply to any paper):
       "The method performs well and is an important contribution."
-    GOOD key_takeaway (specific, standalone):
-      "Per-block domain adapters match full fine-tuning accuracy while
-       updating only 4% of parameters, making deployment practical.""")
+    GOOD key_takeaway (specific mechanism, actionable):
+      "Per-block contrast normalization enables the model to adapt style
+       more effectively than batch normalization with 3x less overfitting risk."
+
+    BAD simple_explanation (analogy disconnected from graph):
+      "An analogy about a smart artist, but doesn't explain the curves."
+    GOOD simple_explanation (analogy grounded in data):
+      "Think of it like adjusting the contrast on a photo at each step — the
+       more often you adjust (at each layer), the better the final image,
+       which is why the IN curve keeps pulling away from BN.""")
 
 
 # ---------------------------------------------------------------------------
@@ -405,15 +418,24 @@ def build_explain_prompt(req: FigureExplainRequest) -> str:
         ════════════════════════════════════════════════════════
         HARD RULES (violations invalidate the response)
         ════════════════════════════════════════════════════════
-        ✗ Do NOT open any field with "This figure shows", "The figure
-          illustrates", "In this figure", or any variant.
+        ✗ Do NOT open summary or any field with:
+          - "This figure shows"
+          - "The figure illustrates"
+          - "The figure demonstrates" ← THIS IS CRITICAL
+          - "In this figure", "As shown here", "We see"
+          These are meta-commentary that wastes words. Lead with MECHANISM.
+
         ✗ Do NOT copy or paraphrase the caption verbatim.
         ✗ Do NOT invent numbers, statistics, or details not in the metadata.
         ✗ Do NOT use filler openers: "Certainly!", "Great question", "Sure".
         ✗ Do NOT produce vague or generic statements that could apply to
-          any figure in any paper.
-        ✓ Every sentence must earn its place — specific, non-redundant,
-          and grounded in the provided metadata.
+          any figure in any paper (e.g., "The method works well...").
+        ✗ Do NOT write insights that merely restate the caption or title.
+
+        ✓ Every sentence must earn its place — specific, grounded in the
+          metadata, and focused on MECHANISM (WHY, not just WHAT).
+        ✓ Analogies in simple_explanation must connect to the actual
+          patterns in the figure, not float free.
     """)
 
 
@@ -421,24 +443,29 @@ def build_explain_prompt(req: FigureExplainRequest) -> str:
 # Defined separately so they can be updated or unit-tested independently.
 _FIELD_RULES: dict[str, str] = {
     "summary": (
-        "2–3 sentences. Lead with the finding or mechanism, not a "
-        "description. Cover: (a) what the figure demonstrates, "
-        "(b) why it matters to the paper's argument."
+        "2–3 sentences. NEVER open with 'This figure shows', 'The figure "
+        "demonstrates', or similar meta-commentary. Instead, lead directly "
+        "with the MECHANISM or WHY: what design choice or data property "
+        "explains the observed pattern? Then state what it proves."
     ),
     "insights": (
         "Exactly {insight_count} non-redundant strings. Each must "
-        "answer a different question about the figure. No bullet "
-        "prefixes, no numbering — plain strings only."
+        "answer a different question — avoid repeating the same angle. "
+        "Prioritise WHY and SO WHAT over WHAT. No bullet prefixes, "
+        "no numbering — plain strings only."
     ),
     "simple_explanation": (
         "1–3 sentences accessible to a reader new to the field. "
-        "Use plain language. An analogy is encouraged but not required. "
-        "Must preserve the core insight — not just a dumbed-down restatement."
+        "Use plain language. If you use an analogy, GROUND it in the "
+        "actual graph or mechanism (e.g., 'like turning up contrast at each "
+        "step, which is why the curves diverge'). Must preserve the core "
+        "insight — being simple does not mean being vague."
     ),
     "key_takeaway": (
         "Exactly ONE sentence. Must be self-contained (readable out of "
-        "context). Must name something specific — a result, a design "
-        "choice, a trade-off. Not a generalisation."
+        "context). Must name the MECHANISM or design principle that makes "
+        "this result possible — not just 'we won' but 'how we won'. "
+        "Specific, not generic. Not a generalisation."
     ),
 }
 
