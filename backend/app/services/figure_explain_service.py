@@ -85,125 +85,362 @@ _MIN_CONTENT_CHARS: int = 20
 # SECTION 2 — PROMPT BUILDER
 # ============================================================================
 
-# Mode-specific instructions injected into the prompt's TASK block.
+# ---------------------------------------------------------------------------
+# 2a. Mode-specific instructions
+# ---------------------------------------------------------------------------
+# Each entry teaches the model *how to think* for that mode, not just
+# how many bullets to produce. The framing shifts the model's internal
+# reasoning posture, which produces qualitatively different outputs.
+
 _MODE_INSTRUCTIONS: dict[ExplainMode, str] = {
-    ExplainMode.QUICK: (
-        "Be concise. Provide 1–2 sharp insights. "
-        "Skip deep reasoning — the reader wants a fast overview."
-    ),
-    ExplainMode.DETAILED: (
-        "Provide deeper reasoning. Give 3–5 insights covering what the "
-        "figure shows, why it is significant, and what it implies for the "
-        "research. Use precise language appropriate for a technical reader."
-    ),
-    ExplainMode.SIMPLE: (
-        "Write for a beginner. Avoid jargon — if you must use a technical "
-        "term, define it immediately in plain English. Use an analogy if "
-        "the concept is abstract. Give 2–3 clear insights."
-    ),
+    ExplainMode.QUICK: textwrap.dedent("""\
+        MODE: QUICK SCAN
+        ----------------
+        The reader has 10 seconds. Your job is to give them the single most
+        useful thing to know about this figure — fast.
+
+        - Write 1–2 insights maximum. Each must be a standalone observation
+          that could not be inferred from the caption alone.
+        - summary: 1 tight sentence. No setup. No "this figure shows".
+          Lead with the finding, not the description.
+        - simple_explanation: 1–2 sentences. Imagine explaining to a
+          smart friend who skimmed the paper.
+        - key_takeaway: the ONE sentence a reader should remember.
+        - Do NOT pad. Fewer words is better here."""),
+
+    ExplainMode.DETAILED: textwrap.dedent("""\
+        MODE: DEEP EXPLANATION
+        ----------------------
+        The reader wants to *understand*, not just be informed.
+        Think like a PhD advisor explaining this to a first-year student.
+
+        - Write 3–5 insights. Each insight must answer a different question:
+            Insight 1: What does this figure directly demonstrate?
+            Insight 2: What is surprising, non-obvious, or counterintuitive?
+            Insight 3: What does this imply for the paper's core argument?
+            Insight 4+ (optional): Trade-offs, limitations, or open questions.
+        - summary: 2–3 sentences covering (a) what it shows, (b) why the
+          authors included it, (c) what it proves or supports.
+        - simple_explanation: Restate the core idea as if explaining to
+          someone who has never read a research paper. An analogy helps.
+        - key_takeaway: Distil everything into ONE sentence that would
+          survive being quoted out of context.
+        - Prioritise WHY and SO WHAT over WHAT."""),
+
+    ExplainMode.SIMPLE: textwrap.dedent("""\
+        MODE: PLAIN ENGLISH
+        -------------------
+        The reader is new to this topic. Your job is to build intuition,
+        not deliver precision.
+
+        - Write 2–3 insights. Each must be jargon-free. If a technical term
+          is unavoidable, define it inline in one clause.
+        - Use one concrete analogy somewhere in simple_explanation —
+          pick something from everyday life (cooking, sports, maps, music).
+        - summary: 2 sentences max. Short words. Short sentences.
+          A 16-year-old should be able to follow it.
+        - key_takeaway: 1 sentence. Plain English. No acronyms.
+        - Do NOT water down the insight — being simple does not mean being
+          vague. Be precise, just in accessible language."""),
 }
 
-# Figure-type-specific hint injected when the type is known.
-_TYPE_HINTS: dict[FigureType, str] = {
-    FigureType.GRAPH:      "This is a graph — comment on trends, axes, and what the shape of the curve reveals.",
-    FigureType.DIAGRAM:    "This is a diagram — explain what each component does and how they relate to each other.",
-    FigureType.TABLE:      "This is a table — highlight the most important rows/columns and what they reveal when compared.",
-    FigureType.IMAGE:      "This is an image — describe what is visually shown and what the researchers intended to illustrate.",
-    FigureType.CHART:      "This is a chart — interpret the distribution, proportions, or comparisons shown.",
-    FigureType.COMPARISON: "This is a comparison figure — focus on what is being compared, which performs best, and by how much.",
+# ---------------------------------------------------------------------------
+# 2b. Type-specific reasoning instructions
+# ---------------------------------------------------------------------------
+# These go beyond "what to look for" (the old hint) and tell the model
+# *how to reason* about each figure type. The difference matters:
+# observation → reasoning → insight.
+
+_TYPE_REASONING: dict[FigureType, str] = {
+    FigureType.GRAPH: textwrap.dedent("""\
+        GRAPH / LINE PLOT REASONING:
+        1. Identify what the X-axis and Y-axis represent — name the quantities
+           and their units if stated. Do not skip this.
+        2. Describe the shape of the curve(s): monotonic? plateauing?
+           oscillating? diverging?
+        3. Locate the inflection point or the most significant region.
+           What happens there and why does it matter?
+        4. If multiple lines exist, explain what their separation or
+           convergence tells us — do not just say "A is higher than B".
+        5. State what the trend *implies* for the paper's claim.
+           The trend is evidence; your job is to name what it is evidence of."""),
+
+    FigureType.CHART: textwrap.dedent("""\
+        CHART / BAR / PIE REASONING:
+        1. Name what is being measured and how it is broken down
+           (categories, groups, time periods).
+        2. Identify the dominant category or the most surprising proportion.
+        3. Highlight the gap between the best and worst performer —
+           is it marginal or substantial? That difference has meaning.
+        4. Explain what the distribution pattern implies (skewed?
+           balanced? concentrated?).
+        5. Connect the chart's conclusion to the paper's hypothesis:
+           does this chart confirm, challenge, or nuance it?"""),
+
+    FigureType.DIAGRAM: textwrap.dedent("""\
+        DIAGRAM / ARCHITECTURE REASONING:
+        1. Identify the top-level components or stages. What is the system
+           *doing* at the highest level of abstraction?
+        2. Trace the primary data/information flow from input to output.
+           What transforms at each step?
+        3. Identify the most novel or non-standard component — the part
+           that makes this architecture different from prior work.
+        4. Explain how two or more components *interact*. Arrows and
+           connections are the real content of a diagram — decode them.
+        5. State the architectural choice the diagram is *justifying*.
+           Why did the authors design it this way?"""),
+
+    FigureType.IMAGE: textwrap.dedent("""\
+        IMAGE / VISUAL OUTPUT REASONING:
+        1. Identify what the image is showing — is it raw input, processed
+           output, intermediate result, or a comparison across conditions?
+        2. Describe the most salient visual difference between examples
+           (if multiple are shown). Be specific: texture, sharpness,
+           artefacts, completeness, colour fidelity.
+        3. State what that visual difference *demonstrates* — is it showing
+           improvement, degradation, a failure mode, or a qualitative shift?
+        4. If there is a baseline vs. proposed comparison, name which is
+           better and in what specific way.
+        5. Note any visual artefact, edge case, or failure visible in the
+           image that the authors may be drawing attention to (or glossing over)."""),
+
+    FigureType.TABLE: textwrap.dedent("""\
+        TABLE REASONING:
+        1. Identify what each row and column represent — methods/models
+           as rows, metrics as columns (or vice versa).
+        2. Find the best-performing row on the primary metric. By how much
+           does it lead? Is the margin meaningful or marginal?
+        3. Find the biggest *unexpected* result: a method that beats
+           expectations, or a metric where rankings reverse.
+        4. Highlight trade-offs: does the best method on metric A lose on
+           metric B? This is usually the most interesting story in a table.
+        5. State what conclusion the full table is designed to support.
+           Tables in papers are not neutral — they are arguments."""),
+
+    FigureType.COMPARISON: textwrap.dedent("""\
+        COMPARISON FIGURE REASONING:
+        1. Identify *exactly* what is being compared: methods, models,
+           hyper-parameters, conditions, or outputs?
+        2. Identify the single most important difference in the results.
+           Do not list everything — pick the one that matters most.
+        3. Explain *why* that difference exists, not just that it does.
+           What design choice, data property, or algorithm causes it?
+        4. Identify any case where the expected winner does not win —
+           those reversals reveal the limits of the proposed method.
+        5. State what this comparison proves in the context of the paper's
+           contribution. Is it ablation? Baseline comparison? Robustness check?"""),
 }
 
+# Fallback for FigureType.OTHER / FigureType.UNKNOWN
+_TYPE_REASONING_FALLBACK: str = textwrap.dedent("""\
+    UNKNOWN / OTHER FIGURE REASONING:
+    The type of this figure is not specified. Reason from the metadata:
+    1. Infer the most likely figure type from the title, description,
+       and caption. State your inference at the start of the summary.
+    2. Apply the reasoning approach most appropriate for your inferred type.
+    3. If the figure type is genuinely ambiguous, focus on PURPOSE:
+       what argument is this figure making in the paper?
+    4. Avoid over-specific assumptions — prefer confident general insights
+       over uncertain specific ones.""")
+
+
+# ---------------------------------------------------------------------------
+# 2c. Shared negative examples (few-shot anti-patterns)
+# ---------------------------------------------------------------------------
+# These are concrete examples of BAD output. Showing the model what NOT to
+# produce is often more effective than abstract rules alone.
+
+_ANTI_PATTERNS: str = textwrap.dedent("""\
+    ANTI-PATTERNS — outputs like these will be rejected:
+
+    BAD summary (generic opener):
+      "This figure shows the performance of the proposed method across..."
+    GOOD summary (leads with finding):
+      "The proposed model achieves a 12% accuracy gain over baselines on
+       the hardest split, with the gap widening as training data grows."
+
+    BAD insight (restates the caption):
+      "The figure presents encoder and decoder components connected by
+       cross-attention layers."
+    GOOD insight (adds interpretation):
+      "Inserting cross-attention at every block, rather than only at the
+       final layer, lets the model course-correct domain shift incrementally —
+       this is the architectural bet the paper is making."
+
+    BAD key_takeaway (vague):
+      "The method performs well and is an important contribution."
+    GOOD key_takeaway (specific, standalone):
+      "Per-block domain adapters match full fine-tuning accuracy while
+       updating only 4% of parameters, making deployment practical.""")
+
+
+# ---------------------------------------------------------------------------
+# 2d. Prompt assembler
+# ---------------------------------------------------------------------------
 
 def build_explain_prompt(req: FigureExplainRequest) -> str:
     """
     Construct a structured, mode-aware LLM prompt from figure metadata.
 
-    Prompt layout (top-down priority)
-    ----------------------------------
-    1. System persona     — one line, scoped to research figures.
-    2. Figure metadata    — title, description, caption, type, page.
-    3. Mode instruction   — depth and tone directive.
-    4. Type hint          — optional visual-specific guidance.
-    5. Output contract    — strict JSON schema with field descriptions.
-    6. Hard rules         — no hallucination, no caption repetition.
-
-    The JSON schema is embedded in the prompt rather than requested as a
-    separate system message so it works across Groq, Gemini, and Ollama
-    without provider-specific system-message configuration.
+    Prompt layout (top-down)
+    ------------------------
+    1. Role + mission statement  — scoped persona, NOT to summarise
+    2. Figure metadata           — all available fields, labelled
+    3. Chain-of-thought scaffold — 4 guided reasoning questions
+    4. Type-specific reasoning   — how to analyse THIS kind of figure
+    5. Mode instruction          — depth, tone, insight count
+    6. Anti-patterns             — few-shot negative examples
+    7. Output contract           — strict JSON schema with field rules
+    8. Final hard rules          — repeated for emphasis at the end
 
     Parameters
     ----------
     req : FigureExplainRequest
-        Validated request model.  Caption is already truncated to 600 chars
-        by the Pydantic validator.
+        Validated request model. Caption is already truncated to 600 chars.
 
     Returns
     -------
     str
         Fully formed prompt string ready for any chat-completion backend.
     """
-    mode         = req.mode
-    fig_type     = req.type
-    mode_instr   = _MODE_INSTRUCTIONS[mode]
-    type_hint    = _TYPE_HINTS.get(fig_type, "")
+    mode       = req.mode
+    fig_type   = req.type
+    mode_instr = _MODE_INSTRUCTIONS[mode]
+    type_logic = _TYPE_REASONING.get(fig_type, _TYPE_REASONING_FALLBACK)
 
-    # ── Figure metadata block ─────────────────────────────────────────────────
-    # Use the richest available text field for each slot.
-    # Fall back gracefully when fields are empty (un-enriched figures).
-    title_line       = f"Title:       {req.title}"       if req.title       else "Title:       (not available)"
-    description_line = f"Description: {req.description}" if req.description else "Description: (not available)"
-    caption_line     = f"Caption:     {req.caption}"     if req.caption     else "Caption:     (not available)"
+    # ── Metadata block — rich labelling, graceful fallback ────────────────
+    title_line       = f"Title:       {req.title}"       if req.title       else "Title:       (not provided)"
+    description_line = f"Description: {req.description}" if req.description else "Description: (not provided)"
+    caption_line     = f"Caption:     {req.caption}"     if req.caption     else "Caption:     (not provided)"
     type_line        = f"Type:        {fig_type.value}"
     page_line        = f"Page:        {req.page}"        if req.page        else ""
 
-    metadata_lines = [title_line, description_line, caption_line, type_line]
+    meta_lines = [title_line, description_line, caption_line, type_line]
     if page_line:
-        metadata_lines.append(page_line)
+        meta_lines.append(page_line)
+    metadata_block = "\n".join(meta_lines)
 
-    metadata_block = "\n".join(metadata_lines)
-
-    # ── Type hint block (optional) ────────────────────────────────────────────
-    type_hint_block = f"\nFIGURE-TYPE GUIDANCE:\n{type_hint}\n" if type_hint else ""
-
-    # ── Insight count hint (derived from mode) ────────────────────────────────
+    # ── Insight count derived from mode ────────────────────────────────────
     insight_counts = {
-        ExplainMode.QUICK:    "1-2",
-        ExplainMode.DETAILED: "3-5",
-        ExplainMode.SIMPLE:   "2-3",
+        ExplainMode.QUICK:    "1–2",
+        ExplainMode.DETAILED: "3–5",
+        ExplainMode.SIMPLE:   "2–3",
     }
     insight_count = insight_counts[mode]
 
-    # ── Assemble ──────────────────────────────────────────────────────────────
+    # ── Assemble ───────────────────────────────────────────────────────────
     return textwrap.dedent(f"""\
-        You are an AI research assistant specialising in explaining figures from academic papers.
-        Analyse the following figure and produce a structured explanation.
+        ════════════════════════════════════════════════════════
+        ROLE
+        ════════════════════════════════════════════════════════
+        You are an expert AI research assistant who specialises in helping
+        students deeply understand figures from academic papers.
 
-        --- FIGURE METADATA ---
+        Your mission is NOT to summarise. It is to unlock meaning.
+        A student reading your output should think:
+        "I finally understand WHY this figure is here and what it proves."
+
+        ════════════════════════════════════════════════════════
+        FIGURE METADATA
+        ════════════════════════════════════════════════════════
         {metadata_block}
-        --- END METADATA ---
-        {type_hint_block}
-        MODE: {mode.value.upper()}
-        INSTRUCTION: {mode_instr}
 
-        OUTPUT RULES (STRICT — violations cause a retry):
-        • Do NOT repeat or paraphrase the caption verbatim.
-        • Do NOT invent data, numbers, or details not present in the metadata.
-        • Do NOT open any field with filler like "Certainly!" or "This figure shows...".
-        • summary must be 2-3 sentences that explain what the figure communicates.
-        • insights must contain exactly {insight_count} distinct, non-redundant bullet points.
-        • simple_explanation must use plain English and be accessible to a non-expert.
-        • key_takeaway must be a SINGLE sentence — the most important conclusion.
+        ════════════════════════════════════════════════════════
+        STEP 1 — THINK (internal reasoning, not in output)
+        ════════════════════════════════════════════════════════
+        Before writing a single output field, reason through these four
+        questions silently. Your answers will shape every field below.
 
-        Respond ONLY with a valid JSON object — no markdown fences, no preamble, no trailing text.
-        The JSON must match this exact schema:
+        Q1. PURPOSE — Why did the authors include this figure?
+            What specific claim or result is it meant to support?
+
+        Q2. MECHANISM — What relationship, pattern, or transformation
+            does it demonstrate? What is the independent and dependent
+            variable (or cause and effect)?
+
+        Q3. SIGNIFICANCE — What would be missing from the paper if this
+            figure were deleted? What does it prove that text alone cannot?
+
+        Q4. STUDENT TRAP — What is the most likely misconception a student
+            will form by looking at this figure without expert guidance?
+            Your explanation must preemptively correct that misconception.
+
+        ════════════════════════════════════════════════════════
+        STEP 2 — FIGURE-TYPE REASONING
+        ════════════════════════════════════════════════════════
+        {type_logic}
+
+        ════════════════════════════════════════════════════════
+        STEP 3 — MODE INSTRUCTIONS
+        ════════════════════════════════════════════════════════
+        {mode_instr}
+
+        The insights array must contain exactly {insight_count} items.
+        Each insight must be distinct — no overlap in content or angle.
+
+        ════════════════════════════════════════════════════════
+        STEP 4 — AVOID THESE ANTI-PATTERNS
+        ════════════════════════════════════════════════════════
+        {_ANTI_PATTERNS}
+
+        ════════════════════════════════════════════════════════
+        OUTPUT CONTRACT
+        ════════════════════════════════════════════════════════
+        Return ONLY a valid JSON object — no markdown fences, no preamble,
+        no trailing commentary. The object must match this exact schema:
 
         {{
-          "summary":            "<2-3 sentence explanation of what the figure shows>",
-          "insights":           ["<insight 1>", "<insight 2>"],
-          "simple_explanation": "<beginner-friendly explanation>",
-          "key_takeaway":       "<one powerful takeaway sentence>"
+          "summary":            "<See field rules below>",
+          "insights":           ["<insight 1>", "<insight 2>", ...],
+          "simple_explanation": "<See field rules below>",
+          "key_takeaway":       "<See field rules below>"
         }}
+
+        Field rules:
+        • summary            — {_FIELD_RULES["summary"]}
+        • insights           — {_FIELD_RULES["insights"].format(insight_count=insight_count)}
+        • simple_explanation — {_FIELD_RULES["simple_explanation"]}
+        • key_takeaway       — {_FIELD_RULES["key_takeaway"]}
+
+        ════════════════════════════════════════════════════════
+        HARD RULES (violations invalidate the response)
+        ════════════════════════════════════════════════════════
+        ✗ Do NOT open any field with "This figure shows", "The figure
+          illustrates", "In this figure", or any variant.
+        ✗ Do NOT copy or paraphrase the caption verbatim.
+        ✗ Do NOT invent numbers, statistics, or details not in the metadata.
+        ✗ Do NOT use filler openers: "Certainly!", "Great question", "Sure".
+        ✗ Do NOT produce vague or generic statements that could apply to
+          any figure in any paper.
+        ✓ Every sentence must earn its place — specific, non-redundant,
+          and grounded in the provided metadata.
     """)
+
+
+# Per-field rules referenced in the output contract block above.
+# Defined separately so they can be updated or unit-tested independently.
+_FIELD_RULES: dict[str, str] = {
+    "summary": (
+        "2–3 sentences. Lead with the finding or mechanism, not a "
+        "description. Cover: (a) what the figure demonstrates, "
+        "(b) why it matters to the paper's argument."
+    ),
+    "insights": (
+        "Exactly {insight_count} non-redundant strings. Each must "
+        "answer a different question about the figure. No bullet "
+        "prefixes, no numbering — plain strings only."
+    ),
+    "simple_explanation": (
+        "1–3 sentences accessible to a reader new to the field. "
+        "Use plain language. An analogy is encouraged but not required. "
+        "Must preserve the core insight — not just a dumbed-down restatement."
+    ),
+    "key_takeaway": (
+        "Exactly ONE sentence. Must be self-contained (readable out of "
+        "context). Must name something specific — a result, a design "
+        "choice, a trade-off. Not a generalisation."
+    ),
+}
 
 
 # ============================================================================
