@@ -114,14 +114,50 @@ _MODE_INSTRUCTIONS: dict[ExplainMode, str] = {
         The reader wants to *understand*, not just be informed.
         Think like a PhD advisor explaining this to a first-year student.
 
-        - Write 3–5 insights. Each must answer a DIFFERENT question:
-            Insight 1: What mechanism or design choice does this figure reveal?
-            Insight 2: What is surprising, non-obvious, or does this refute?
-            Insight 3: What does this prove about the paper's hypothesis?
-            Insight 4+ (optional): Trade-offs, limitations, or generalisability.
-        - summary: 2–3 sentences. NEVER open with 'This figure shows'.
-          Lead with the MECHANISM (why the curves diverge / why method A wins).
-          Then state what it proves about the paper's claim.
+        - Write 3–5 insights. CRITICAL: Each belongs in ONE category ONLY.
+          Insights MUST be in separate boxes — no bleeding between them.
+
+          STRICT DIMENSIONAL SEPARATION (each insight addresses ONE only):
+            DIMENSION 1 — MECHANISM: How does this work technically?
+                          Focus on the approach, structure, or algorithm.
+                          (e.g., masks partition regions, how data flows)
+                          Do NOT include comparison or benefits here.
+            
+            DIMENSION 2 — COMPARISON: How is this different from standard?
+                          Focus on what changed relative to prior work.
+                          (e.g., "unlike global transfer, this is regional")
+                          Do NOT duplicate the mechanism or benefits here.
+            
+            DIMENSION 3 — IMPLICATION / BENEFIT: Why does this matter?
+                          Focus on what it enables, unlocks, or solves.
+                          (e.g., "users can now control style per-region")
+                          Do NOT re-explain the mechanism here.
+            
+            DIMENSION 4+ (optional): Technical behavior, limitations, or
+                          design implications. (e.g., "independence of
+                          regions enables parallel processing")
+
+          CRITICAL TEST: If you remove the insight, does Dimension 2 or 3
+          still make sense? If yes, you've repeated yourself. REWRITE.
+
+          ✗ BAD (Repetition across dimensions):
+            Dimension 1: "Uses masks to partition regions."
+            Dimension 3: "Masks partition regions, enabling control."
+            ❌ Both mention masks + partition. REJECTED.
+
+          ✓ GOOD (Truly separate):
+            Dimension 1: "Masks independently partition the image into
+                        disjoint style regions, each processed separately."
+            Dimension 2: "Unlike traditional global style transfer, this
+                        approach enables spatial granularity."
+            Dimension 3: "Users can now apply different styles to different
+                        image regions without affecting others."
+            ✅ Zero overlap. Each stands alone.
+
+        - summary: 2–3 sentences. NEVER open with 'This figure shows',
+          'X is achieved through Y', or other template openers.
+          Instead: directly state the KEY INSIGHT or unique property.
+          Avoid generic language — be specific to THIS figure.
         - simple_explanation: Restate the core MECHANISM in everyday terms.
           An analogy is encouraged — but ground it in the actual data pattern.
         - key_takeaway: Distil the MECHANISM into ONE sentence that would
@@ -182,17 +218,15 @@ _TYPE_REASONING: dict[FigureType, str] = {
            does this chart confirm, challenge, or nuance it?"""),
 
     FigureType.DIAGRAM: textwrap.dedent("""\
-        DIAGRAM / ARCHITECTURE REASONING:
-        1. Identify the top-level components or stages. What is the system
-           *doing* at the highest level of abstraction?
-        2. Trace the primary data/information flow from input to output.
-           What transforms at each step?
-        3. Identify the most novel or non-standard component — the part
-           that makes this architecture different from prior work.
-        4. Explain how two or more components *interact*. Arrows and
-           connections are the real content of a diagram — decode them.
-        5. State the architectural choice the diagram is *justifying*.
-           Why did the authors design it this way?"""),
+        DIAGRAM / VISUAL PROCESS REASONING:
+        1. Identify what transformation is being shown (not just components).
+        2. If masks or regions are present:
+           - explain how different regions are treated differently
+           - what each region represents
+        3. Describe how input changes into output.
+        4. Focus on WHAT changes and WHERE (spatial behavior).
+        5. Explain what capability this enables (e.g., control, flexibility).
+        Avoid treating this as a neural network architecture unless clearly shown."""),
 
     FigureType.IMAGE: textwrap.dedent("""\
         IMAGE / VISUAL OUTPUT REASONING:
@@ -333,6 +367,32 @@ def build_explain_prompt(req: FigureExplainRequest) -> str:
         meta_lines.append(page_line)
     metadata_block = "\n".join(meta_lines)
 
+    # ── Grounding block — strict anti-hallucination constraint ────────────────
+    GROUNDING_BLOCK = textwrap.dedent("""\
+        ════════════════════════════════════════════════════════
+        STRICT GROUNDING (CRITICAL)
+        ════════════════════════════════════════════════════════
+
+        You MUST base your explanation ONLY on the provided metadata:
+        Title, Description, Caption, and Type.
+
+        DO NOT:
+        - introduce concepts not present in the metadata
+        - reference other figures from the paper
+        - assume training details or architecture unless explicitly stated
+        - use prior knowledge about the paper if not mentioned here
+
+        If the metadata is limited:
+        - make the best possible inference
+        - stay conservative
+        - DO NOT hallucinate missing details
+
+        If the figure mentions masks, regions, or spatial control:
+        focus ONLY on region-wise transformations and masking behavior.
+
+        Your answer will be rejected if it includes unrelated concepts.
+        """)
+
     # ── Insight count derived from mode ────────────────────────────────────
     insight_counts = {
         ExplainMode.QUICK:    "1–2",
@@ -357,6 +417,8 @@ def build_explain_prompt(req: FigureExplainRequest) -> str:
         FIGURE METADATA
         ════════════════════════════════════════════════════════
         {metadata_block}
+
+        {GROUNDING_BLOCK}
 
         ════════════════════════════════════════════════════════
         STEP 1 — THINK (internal reasoning, not in output)
@@ -397,6 +459,17 @@ def build_explain_prompt(req: FigureExplainRequest) -> str:
         {_ANTI_PATTERNS}
 
         ════════════════════════════════════════════════════════
+        FINAL SELF-CHECK (MANDATORY)
+        ════════════════════════════════════════════════════════
+        Before returning your response, verify:
+
+        - Does every insight directly relate to the given metadata?
+        - Did I introduce any concept not mentioned?
+        - Would this explanation still make sense if the figure changed?
+
+        If the answer to any question is NO, FIX it before returning.
+
+        ════════════════════════════════════════════════════════
         OUTPUT CONTRACT
         ════════════════════════════════════════════════════════
         Return ONLY a valid JSON object — no markdown fences, no preamble,
@@ -432,6 +505,78 @@ def build_explain_prompt(req: FigureExplainRequest) -> str:
           any figure in any paper (e.g., "The method works well...").
         ✗ Do NOT write insights that merely restate the caption or title.
 
+        ════════════════════════════════════════════════════════
+        TECHNICAL LENS MANDATE (CRITICAL FOR DEPTH)
+        ════════════════════════════════════════════════════════
+        At least ONE insight must explain HOW THE MODEL BEHAVES internally,
+        not just what the user gets.
+
+        ✗ SHALLOW (user-facing benefit only):
+          "Users can apply different styles to different regions."
+        
+        ✓ DEEP (model behavior + mechanism):
+          "Masks enforce independence: each region's style transfer
+           is computed separately, preventing style bleeding between
+           regions and enabling fine-grained spatial control."
+
+        EXAMPLES OF TECHNICAL LENS:
+        • How regions are separated or isolated
+        • How the model processes data within each region
+        • Computational independence or parallelization opportunity
+        • Why this architectural choice prevents failure modes
+        • Internal constraints that enable external benefits
+
+        Without at least one technical insight, your explanation is incomplete.
+        Students should understand not just WHAT the figure does,
+        but HOW the model makes it happen.
+
+        ════════════════════════════════════════════════════════
+        INSIGHT DIVERSITY RULES (CRITICAL FOR PRODUCTION)
+        ════════════════════════════════════════════════════════
+        MANDATORY: Insights must provide different angles, NOT rewording.
+
+        ✗ ANTI-PATTERN (Multiple insights that are the same idea):
+          Insight 1: "Masks enable regional control of style."
+          Insight 2: "Masks allow selective style transfer to regions."
+          Insight 3: "Masks provide regional style control."
+          ❌ These are identical — just different words. REJECTED.
+
+        ✓ GOOD (Different angles on the same capability):
+          Insight 1: "The mechanism uses binary masks to partition the image
+                      into independent regions for style transfer."
+          Insight 2: "This differs from prior work by enabling SPATIAL control,
+                      whereas traditional style transfer applies globally."
+          Insight 3: "This enables users to apply different artistic styles
+                      to different parts of the same image — unlocking fine-grained
+                      creative control."
+          ✅ Same capability, three different perspectives.
+
+        DIVERSITY CHECKLIST (before returning):
+        1. Does each insight live in ONE dimension only?
+           (Mechanism ≠ Comparison ≠ Implication ≠ Technical Behavior)
+           If insight 1 mentions "masks enable control", check that insights
+           2 and 3 do NOT mention masks + control combination.
+        
+        2. Remove all keywords (masks, regions, style, transfer) — do
+           insights still sound different? If they collapse to the same
+           idea, they fail dimensional separation. REWRITE.
+        
+        3. At least ONE insight must explain MODEL BEHAVIOR (technical),
+           not just user benefit or architectural comparison.
+        
+        4. If all insights feel similar, rewrite them until they diverge.
+
+        ════════════════════════════════════════════════════════
+        RELEVANCE FILTER (ANTI-HALLUCINATION SHIELD)
+        ════════════════════════════════════════════════════════
+        ✗ Do NOT mention concepts not present in metadata
+          (e.g., if no curves → do not talk about training graphs)
+
+        ✗ If your explanation could apply to a different figure,
+          it is WRONG — make it specific to THIS figure
+
+        ════════════════════════════════════════════════════════
+
         ✓ Every sentence must earn its place — specific, grounded in the
           metadata, and focused on MECHANISM (WHY, not just WHAT).
         ✓ Analogies in simple_explanation must connect to the actual
@@ -444,15 +589,22 @@ def build_explain_prompt(req: FigureExplainRequest) -> str:
 _FIELD_RULES: dict[str, str] = {
     "summary": (
         "2–3 sentences. NEVER open with 'This figure shows', 'The figure "
-        "demonstrates', or similar meta-commentary. Instead, lead directly "
-        "with the MECHANISM or WHY: what design choice or data property "
-        "explains the observed pattern? Then state what it proves."
+        "demonstrates', 'X is achieved through Y', or other template openers. "
+        "Instead, DIRECTLY state the key insight or unique property of this "
+        "figure. Lead with WHAT IS SURPRISING or NON-OBVIOUS about it. "
+        "Be specific to THIS figure — not a generic explanation that could "
+        "apply to any paper. Highlight the novel architectural choice or "
+        "capability, then state what it enables or proves."
     ),
     "insights": (
-        "Exactly {insight_count} non-redundant strings. Each must "
-        "answer a different question — avoid repeating the same angle. "
-        "Prioritise WHY and SO WHAT over WHAT. No bullet prefixes, "
-        "no numbering — plain strings only."
+        "Exactly {insight_count} non-redundant strings. CRITICAL: Each must "
+        "live in ONE dimension only — no bleeding between categories. "
+        "For DETAILED mode: Dimension 1=MECHANISM (how), Dimension 2=COMPARISON "
+        "(vs prior), Dimension 3=IMPLICATION (why matters). Zero vocabulary "
+        "overlap between insights — if removing keywords leaves them identical, "
+        "REWRITE. At least one must have TECHNICAL LENS (model behavior, not "
+        "just user benefit). Prioritise WHY and SO WHAT over WHAT. "
+        "No bullet prefixes, no numbering — plain strings only."
     ),
     "simple_explanation": (
         "1–3 sentences accessible to a reader new to the field. "
