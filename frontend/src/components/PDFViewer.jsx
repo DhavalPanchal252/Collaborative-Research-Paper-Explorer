@@ -587,6 +587,8 @@ function SelectionTooltip({ position, onExplain, onDismiss, loading }) {
 // ─────────────────────────────────────────────────────────────────────────────
 export default function PDFViewer({
   file,
+  targetPage,
+  onTargetPageConsumed,
   onExplainRequest,
   explainLoading,
   explainResult,
@@ -1189,6 +1191,17 @@ export default function PDFViewer({
       window.getSelection()?.removeAllRanges();
     }
   }, [explainLoading]);
+
+  useEffect(() => {
+    if (targetPage && numPages && targetPage <= numPages) {
+      // Delay slightly to ensure react-pdf has rendered the page elements
+      const id = setTimeout(() => {
+        handleScrollToPage(targetPage);
+        onTargetPageConsumed?.();
+      }, 500); // 500ms should be enough for basic DOM skeletons to appear
+      return () => clearTimeout(id);
+    }
+  }, [targetPage, numPages, onTargetPageConsumed]);
 
   // ── Explain from tooltip ───────────────────────────────────────────────────
 

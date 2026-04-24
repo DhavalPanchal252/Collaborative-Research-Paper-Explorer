@@ -1,59 +1,71 @@
 // src/services/figureService.js
-// Phase 7.4 — Backend now returns structured figure data with type, description,
-// importance, quality_score. No client-side inference needed.
+// Phase 7.5.2 — Attach session-scoped pdf_url to every normalised figure
+// so FigureModal can build page-anchored PDF links without global state.
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
 /**
  * Converts a relative static path to a fully-qualified URL.
  *
- * @param {string} imageUrl  e.g. "/static/figures/xyz.png"
- * @returns {string}         e.g. "http://localhost:8000/static/figures/xyz.png"
+ * Handles three cases:
+ *   "/static/figures/xyz.png"   → "http://localhost:8000/static/figures/xyz.png"
+ *   "http://…/xyz.png"          → unchanged (already absolute)
+ *   ""                          → ""
+ *
+ * @param {string} path  Relative or absolute URL from the API.
+ * @returns {string}     Fully-qualified URL safe to use in <img src> or window.open.
  */
-function resolveImageUrl(imageUrl = "") {
-  if (!imageUrl) return "";
-  if (/^(https?:\/\/|data:)/.test(imageUrl)) return imageUrl;
-  return `${API_BASE}${imageUrl.startsWith("/") ? "" : "/"}${imageUrl}`;
+function resolveUrl(path = "") {
+  if (!path) return "";
+  if (/^(https?:\/\/|data:)/.test(path)) return path;
+  return `${API_BASE}${path.startsWith("/") ? "" : "/"}${path}`;
 }
 
 /**
  * Normalises a raw API figure record into a consistent shape used throughout
- * the UI. Backend (Phase 7.4) provides: id, title, clean_caption, caption,
+ * the UI.  Backend (Phase 7.4+) provides: id, title, clean_caption, caption,
  * type, description, importance, quality_score, confidence, page, image_url.
  *
- * Rules applied here so components never need to handle raw API shapes:
+ * Phase 7.5.2 addition: accepts an optional `pdfUrl` (session-scoped, resolved
+ * to an absolute URL) and stamps it as `pdf_url` on the returned object.
+ * FigureModal reads `figure.pdf_url` to build "#page=N" navigation links.
+ *
+ * Normalisation rules:
  *  - image        → resolved absolute URL from image_url
- *  - type         → backend value (lowercase), fallback "graph"
- *  - confidence   → backend confidence; fall back to quality_score; normalise
- *                   to 0-100 range (backend may send 0-1 or 0-100)
+ *  - pdf_url      → resolved absolute URL for the source PDF (new)
+ *  - type         → backend value (lowercase), fallback "other"
+ *  - confidence   → normalised to 0-100 integer (backend may send 0-1 or 0-100)
  *  - importance   → lowercase; fallback "medium"
  *  - title        → fallback id
  *  - description  → fallback clean_caption, then caption
  *
- * @param {object} raw  Raw figure object from the API.
- * @returns {object}    Normalised figure.
+ * @param {object} raw     Raw figure object from the API.
+ * @param {string} pdfUrl  Resolved absolute URL for the session PDF (may be "").
+ * @returns {object}       Normalised figure with pdf_url attached.
  */
-function normaliseFigure(raw) {
-  // ── Resolve image ──────────────────────────────────────────────────────────
-  const image = resolveImageUrl(raw.image_url || "");
+function normaliseFigure(raw, pdfUrl = "") {
+  // ── Image URL ─────────────────────────────────────────────────────────────
+  const image = resolveUrl(raw.image_url || "");
 
-  // ── Type — backend provides it directly; guard against missing/wrong case ──
+  // ── Type ──────────────────────────────────────────────────────────────────
   const type = (raw.type ?? "other").toLowerCase();
 
-  // ── Importance — lowercase + fallback ─────────────────────────────────────
+  // ── Importance ────────────────────────────────────────────────────────────
   const importance = (raw.importance ?? "medium").toLowerCase();
 
-  // ── Confidence — prefer explicit confidence, fall back to quality_score ───
-  // Normalise to 0-100 integer regardless of whether backend sends 0-1 or 0-100.
+  // ── Confidence (normalise to 0-100 integer) ───────────────────────────────
+  // Backend may send a 0-1 float (preferred) or a 0-100 integer.
+  // quality_score is 0-3; used as a fallback.
   let confidence = null;
-
   if (raw.confidence != null) {
-    confidence = Math.round(raw.confidence * 100);
+    confidence = Math.round(
+      raw.confidence <= 1 ? raw.confidence * 100 : raw.confidence,
+    );
   } else if (raw.quality_score != null) {
     confidence = Math.round((raw.quality_score / 3) * 100);
   }
 
-  // ── Title / description fallbacks ─────────────────────────────────────────
+  // ── Title / description ───────────────────────────────────────────────────
   const id = raw.id ?? crypto.randomUUID();
   const title = raw.title?.trim() || id;
   const description =
@@ -63,15 +75,21 @@ function normaliseFigure(raw) {
     "";
 
   return {
-    // Spread raw so nothing is lost (clean_caption, caption, etc. stay available)
+    // Spread raw first so nothing is silently dropped (clean_caption, bbox, etc.)
     ...raw,
-    // Overwrite / add normalised fields
+    // ── Overwrite / add normalised fields ────────────────────────────────────
+    id,
     image,
     type,
     importance,
-    confidence,   // always 0-100 int or null — no further conversion needed in UI
+    confidence,   // always 0-100 int or null
     title,
     description,
+    // ── Phase 7.5.2: page-anchored PDF navigation ────────────────────────────
+    // Resolved absolute URL for the session PDF (e.g.
+    // "http://localhost:8000/static/papers/paper.pdf").
+    // FigureModal builds: window.open(`${pdf_url}#page=${page}`, "_blank")
+    pdf_url: pdfUrl,
   };
 }
 
@@ -109,11 +127,11 @@ export async function getFigures(sessionId) {
       const body = await res.json();
       detail = body?.detail ?? body?.message ?? "";
     } catch {
-      // Ignore parse failures
+      // Ignore parse failures — the status message below is sufficient.
     }
     throw new Error(
       detail ||
-        `Server returned ${res.status} ${res.statusText}. Please try again.`
+        `Server returned ${res.status} ${res.statusText}. Please try again.`,
     );
   }
 
@@ -124,11 +142,16 @@ export async function getFigures(sessionId) {
     throw new Error("Invalid response from server. Please try again.");
   }
 
+  // ── Resolve the session-scoped PDF URL once ───────────────────────────────
+  // Backend returns e.g. "/static/papers/paper.pdf"; we resolve it to an
+  // absolute URL here so every figure carries a ready-to-use href.
+  const resolvedPdfUrl = resolveUrl(data.pdf_url ?? "");
+
   const rawFigures = Array.isArray(data.figures) ? data.figures : [];
 
   return {
     sessionId: data.session_id ?? sessionId,
     total:     data.total_figures ?? rawFigures.length,
-    figures:   rawFigures.map(normaliseFigure),
+    figures:   rawFigures.map((fig) => normaliseFigure(fig, resolvedPdfUrl)),
   };
 }

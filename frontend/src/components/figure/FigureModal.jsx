@@ -1,21 +1,21 @@
 // src/components/figure/FigureModal.jsx
-// Phase 7.5.1 — Layout fix: action buttons are now in a sticky footer,
-//               always visible regardless of content length.
+// Phase 7.5.2 — "Go to PDF" opens the source paper at the exact figure page
+//               using the browser-native PDF fragment "#page=N".
 //
-// Root cause of the overflow bug
+// What changed from Phase 7.5.1
 // --------------------------------
-// The "✦ Explain with AI" + "↗ Go to PDF" buttons were the LAST item inside
-// `.fig-modal-right-scroll` (overflow-y: auto).  On short modals the scroll
-// container was tall enough to show them; on taller content or narrow
-// viewports they scrolled out of view.
-//
-// Fix
-// -----
-// • Moved buttons OUTSIDE `.fig-modal-right-scroll` into a new
-//   `.fig-modal-detail-footer` element that is a flex-shrink:0 sibling.
-// • Right panel is now: [close btn absolute] [scroll-area flex:1] [footer flex-shrink:0]
-// • No scroll is needed to reach the buttons — they are always pinned.
-// • Pane-swap (detail ↔ explain) unchanged.
+// • Added `usePdfNavigation` hook — encapsulates all URL-building + edge-case
+//   logic in one place, tested independently.
+// • "↗ Go to PDF" button now:
+//     – Disabled when pdf_url or page is missing/invalid.
+//     – Shows "Go to PDF • p.{N}" as the label.
+//     – Opens a new tab at `pdf_url#page=N`.
+//     – Briefly flashes a "progress" cursor on click (100 ms) without
+//       blocking the UI thread.
+//     – Has tooltip "Open paper at this figure".
+// • onGoToPDF prop is preserved for the in-viewer sibling navigation
+//   (FigureExplainPanel still calls it to scroll the embedded PDF viewer).
+//   The new button does NOT call onGoToPDF — it opens a new browser tab.
 
 import { useEffect, useState, useCallback } from "react";
 import FigureExplainPanel from "./FigureExplainPanel";
@@ -35,11 +35,60 @@ const IMPORTANCE_CONFIG = {
   low:    { label: "Low",           cls: "fig-importance-badge--low"    },
 };
 
+// ---------------------------------------------------------------------------
+// Hook — PDF navigation
+// ---------------------------------------------------------------------------
+/**
+ * Builds the page-anchored PDF URL and returns a stable click handler.
+ *
+ * Rules:
+ *  - Both `pdfUrl` AND a valid `page` (≥ 1) are required; otherwise disabled.
+ *  - `page` values < 1 or non-numeric are treated as page 1 (safe fallback).
+ *  - Absolute URLs (http/https) are used as-is; relative paths are prefixed
+ *    with the Vite API base so this works across dev + staging + prod.
+ *  - Opens in a new tab; noopener + noreferrer for security.
+ *  - "progress" cursor flashes for 100 ms on click — gives tactile feedback
+ *    without blocking the UI thread.
+ *
+ * @param {string|undefined} pdfUrl   Absolute URL for the session PDF.
+ * @param {number|undefined} page     1-based page number from the figure.
+ * @returns {{ href: string, disabled: boolean, handleClick: () => void }}
+ */
+function usePdfNavigation(pdfUrl, page) {
+  const [navigating, setNavigating] = useState(false);
+
+  // Normalise page: must be a positive integer; fall back to 1.
+  const safePage = Number.isFinite(Number(page)) && Number(page) >= 1
+    ? Math.floor(Number(page))
+    : 1;
+
+  // Disabled when there is no URL to navigate to or page is completely invalid.
+  const disabled = !pdfUrl || !Number.isFinite(Number(page));
+
+  // Full URL with fragment — prebuilt so <a href> can also use it.
+  const href = disabled ? "#" : `${pdfUrl}#page=${safePage}`;
+
+  const handleClick = useCallback(() => {
+    if (disabled) return;
+
+    // Brief "progress" cursor — purely cosmetic, does not block anything.
+    setNavigating(true);
+    setTimeout(() => setNavigating(false), 100);
+
+    window.open(href, "_blank", "noopener,noreferrer");
+  }, [disabled, href]);
+
+  return { href, disabled, navigating, handleClick, safePage };
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
 export default function FigureModal({
   figure,
   onClose,
   onExplain,
-  onGoToPDF,
+  onGoToPDF,          // kept for FigureExplainPanel (in-viewer scroll)
   onPrev,
   onNext,
   currentIndex,
@@ -51,6 +100,7 @@ export default function FigureModal({
   const [imgHovered,  setImgHovered]  = useState(false);
   const [explainOpen, setExplainOpen] = useState(false);
 
+  // Reset transient state when the figure changes.
   useEffect(() => {
     setImgLoaded(false);
     setImgError(false);
@@ -80,7 +130,16 @@ export default function FigureModal({
     id, image, clean_caption, caption,
     page, type = "other", title, description,
     importance = "medium", confidence = null,
+    pdf_url,    // ← Phase 7.5.2: stamped by figureService.normaliseFigure
   } = figure;
+
+  // ── PDF navigation (hook) ─────────────────────────────────────────────────
+  const {
+    disabled:   pdfDisabled,
+    navigating: pdfNavigating,
+    handleClick: handleGoToPDF,
+    safePage,
+  } = usePdfNavigation(pdf_url, page);
 
   const badgeLabel    = TYPE_LABEL[type]              ?? "◈ Figure";
   const importanceCfg = IMPORTANCE_CONFIG[importance] ?? IMPORTANCE_CONFIG.medium;
@@ -179,7 +238,7 @@ export default function FigureModal({
             │─────────────────────────────────│
             │  STICKY FOOTER  (flex-shrink:0) │
             │  [✦ Explain with AI]            │
-            │  [↗ Go to PDF]                  │
+            │  [↗ Go to PDF • p.N]            │
             └─────────────────────────────────┘
         */}
         <div className="fig-modal-right fig-modal-right--swappable">
@@ -280,18 +339,45 @@ export default function FigureModal({
                 flex-shrink:0 + border-top pins it to the bottom of the pane.
             ════════════════════════════════════════════════════════════════ */}
             <div className="fig-modal-detail-footer">
+
+              {/* ── Explain with AI ──────────────────────────────────────── */}
               <button
                 className="fig-modal-btn fig-modal-btn--explain fig-modal-btn--primary"
                 onClick={handleExplainClick}
               >
                 ✦ Explain with AI
               </button>
+
+              {/* ── Go to PDF ────────────────────────────────────────────────
+                  Phase 7.5.2 changes:
+                  • Disabled when pdf_url or page is missing.
+                  • Label includes the page number: "↗ Go to PDF • p.4"
+                  • Opens in new tab via window.open (handled by hook).
+                  • data-navigating drives the "progress" cursor CSS tweak.
+                  • title provides an accessible tooltip.
+              ─────────────────────────────────────────────────────────────── */}
               <button
                 className="fig-modal-btn fig-modal-btn--goto fig-modal-btn--secondary"
-                onClick={() => onGoToPDF?.(page)}
+                onClick={handleGoToPDF}
+                disabled={pdfDisabled}
+                data-navigating={pdfNavigating || undefined}
+                title={
+                  pdfDisabled
+                    ? "PDF location unavailable for this figure"
+                    : "Open paper at this figure"
+                }
+                aria-label={
+                  pdfDisabled
+                    ? "Go to PDF (unavailable)"
+                    : `Open paper at page ${safePage}`
+                }
+                style={pdfNavigating ? { cursor: "progress" } : undefined}
               >
-                ↗ Go to PDF
+                {pdfDisabled
+                  ? "↗ Go to PDF"
+                  : `↗ Go to PDF • p.${safePage}`}
               </button>
+
             </div>
 
           </div>

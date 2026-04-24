@@ -28,6 +28,7 @@ export default function App() {
   // ── Phase 7.1: View mode ──────────────────────────────────────────────────
   // "pdf" | "figures" | "citation" | "export"
   const [viewMode, setViewMode] = useState("pdf");
+  const [targetPage, setTargetPage] = useState(null);
 
   // ── Phase X: Theme system ─────────────────────────────────────────────────
   const [theme, setTheme] = useState(() => {
@@ -141,8 +142,8 @@ export default function App() {
 
   const handleFigureGoToPDF = useCallback((page) => {
     console.log("Go to PDF page", page);
+    setTargetPage(page);
     setViewMode("pdf");
-    // Phase 7.2: will call scrollToPage on PDFViewer
   }, []);
 
   const hasPaper = !!uploadedFile;
@@ -210,6 +211,8 @@ export default function App() {
               <div className="paper-pdf">
                 <PDFViewer
                   file={uploadedFile}
+                  targetPage={targetPage}
+                  onTargetPageConsumed={() => setTargetPage(null)}
                   onExplainRequest={handleExplainRequest}
                   explainLoading={explainLoading}
                   explainResult={explainResult}
