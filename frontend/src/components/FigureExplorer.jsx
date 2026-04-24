@@ -151,7 +151,7 @@ export default function FigureExplorer({ onExplain, onGoToPDF }) {
   // ── Handlers ──────────────────────────────────────────────────────────────
   function handleExplain(id) {
     onExplain?.(id);
-    setSelectedFig(null);
+    // Note: Do NOT close the modal here — FigureModal handles the explain view internally
   }
 
   function handleGoToPDF(page) {
