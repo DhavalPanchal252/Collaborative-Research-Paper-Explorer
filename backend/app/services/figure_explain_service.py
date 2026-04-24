@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 # SECTION 1 — CONSTANTS
 # ============================================================================
 
-_LLM_TIMEOUT_SECS: int = 25       # fail fast; fallback fires before the request hangs
+_LLM_TIMEOUT_SECS: int = 20       # fail fast; fallback fires before the request hangs
 _CACHE_MAX_SIZE:   int = 512       # (figure_id, mode) pairs kept in LRU memory
 _PRIMARY_PROVIDER: str = "groq"    # primary LLM — fast, low latency
 _FALLBACK_PROVIDER: str = "gemini" # fallback on primary failure or timeout
@@ -355,10 +355,19 @@ def build_explain_prompt(req: FigureExplainRequest) -> str:
     mode_instr = _MODE_INSTRUCTIONS[mode]
     type_logic = _TYPE_REASONING.get(fig_type, _TYPE_REASONING_FALLBACK)
 
+    # ── Dynamic shortening to prevent token explosion ─────────────────────
+    safe_caption = ""
+    if req.caption:
+        safe_caption = req.caption[:300] + "..." if len(req.caption) > 300 else req.caption
+
+    safe_desc = ""
+    if req.description:
+        safe_desc = req.description[:250] + "..." if len(req.description) > 250 else req.description
+
     # ── Metadata block — rich labelling, graceful fallback ────────────────
     title_line       = f"Title:       {req.title}"       if req.title       else "Title:       (not provided)"
-    description_line = f"Description: {req.description}" if req.description else "Description: (not provided)"
-    caption_line     = f"Caption:     {req.caption}"     if req.caption     else "Caption:     (not provided)"
+    description_line = f"Description: {safe_desc}"       if safe_desc       else "Description: (not provided)"
+    caption_line     = f"Caption:     {safe_caption}"    if safe_caption    else "Caption:     (not provided)"
     type_line        = f"Type:        {fig_type.value}"
     page_line        = f"Page:        {req.page}"        if req.page        else ""
 
@@ -629,7 +638,23 @@ _FIELD_RULES: dict[str, str] = {
 # Pre-compiled to avoid recompilation on every response.
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
 
+def _clean_llm_output(text: str) -> str:
+    if not text:
+        return ""
 
+    text = text.strip()
+
+    # Remove markdown fences
+    text = re.sub(r"```json|```", "", text)
+
+    # Try to extract JSON block manually
+    start = text.find("{")
+    end = text.rfind("}")
+
+    if start != -1 and end != -1:
+        text = text[start:end+1]
+
+    return text.strip()
 def _parse_llm_response(
     raw:       str,
     figure_id: str,
@@ -661,7 +686,7 @@ def _parse_llm_response(
     """
     # ── Strip markdown fences ─────────────────────────────────────────────────
     fence_match = _JSON_FENCE_RE.search(raw)
-    clean = fence_match.group(1) if fence_match else raw.strip()
+    clean = _clean_llm_output(raw)
 
     # ── Attempt JSON parse ────────────────────────────────────────────────────
     try:
@@ -739,6 +764,21 @@ def _safe_response(figure_id: str, mode: ExplainMode) -> FigureExplainResponse:
 # ============================================================================
 # SECTION 4 — EXPLAIN SERVICE
 # ============================================================================
+
+async def _call_with_retry(fn, retries=2):
+    for i in range(retries):
+        try:
+            return await fn()
+        except Exception as e:
+            if i == retries - 1:
+                raise
+            
+            # Explicitly handle 429 Rate Limit
+            if "rate_limit" in str(e).lower() or "429" in str(e):
+                await asyncio.sleep(5)
+            else:
+                await asyncio.sleep(1.5 * (i + 1))
+
 
 class FigureExplainService:
     """
@@ -852,9 +892,11 @@ class FigureExplainService:
             llm = get_llm(_PRIMARY_PROVIDER)
             start = time.perf_counter()
 
-            raw_response = await asyncio.wait_for(
-                asyncio.to_thread(llm, prompt),
-                timeout=_LLM_TIMEOUT_SECS,
+            raw_response = await _call_with_retry(
+                lambda: asyncio.wait_for(
+                    asyncio.to_thread(llm, prompt),
+                    timeout=_LLM_TIMEOUT_SECS,
+                )
             )
             self._llm_calls += 1
             elapsed = time.perf_counter() - start
@@ -887,9 +929,11 @@ class FigureExplainService:
                 fallback_llm = get_llm(_FALLBACK_PROVIDER)
                 start = time.perf_counter()
 
-                raw_response = await asyncio.wait_for(
-                    asyncio.to_thread(fallback_llm, prompt),
-                    timeout=_LLM_TIMEOUT_SECS,
+                raw_response = await _call_with_retry(
+                    lambda: asyncio.wait_for(
+                        asyncio.to_thread(fallback_llm, prompt),
+                        timeout=_LLM_TIMEOUT_SECS,
+                    )
                 )
                 self._fallback_hits += 1
                 elapsed = time.perf_counter() - start

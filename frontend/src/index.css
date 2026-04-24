@@ -3756,7 +3756,7 @@ textarea { font-family: inherit; font-size: inherit; }
 /* ── Left image panel ─────────────────────────────── */
 
 .fig-modal-left {
-  flex: 6;
+  flex: 7;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -3833,7 +3833,7 @@ textarea { font-family: inherit; font-size: inherit; }
 /* ── Right detail panel ───────────────────────────── */
 
 .fig-modal-right {
-  flex: 4;
+  flex: 3;
   display: flex;
   flex-direction: column;
   position: relative;
@@ -4299,19 +4299,20 @@ textarea { font-family: inherit; font-size: inherit; }
   max-height: calc(100vh - 48px) !important;
 }
 
-/* Left image panel: takes remaining space, never shrinks below 55% */
+/* Left image panel: 70% width */
 .fig-modal-left {
-  flex:      1 1 0;   /* grows into available space */
+  flex:      7;
+  max-width: 60%;
   min-width: 0;
   min-height: unset;
   height:     100%;
 }
 
-/* Right panel: FIXED 460px — never flexes narrower */
+/* Right panel: 30% width */
 .fig-modal-right {
-  flex:       0 0 460px;
-  width:      460px;
-  min-width:  460px;
+  flex:       3;
+  max-width:  40%;
+  min-width:  30%;
   height:     100%;
   display:    flex;
   flex-direction: column;
