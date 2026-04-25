@@ -7,6 +7,9 @@ from app.routes.figure_routes import router as figure_router          # Phase 7.
 from fastapi.staticfiles import StaticFiles
 from app.routes.figure_explain import router as figure_explain_router
 from app.routes.citation_graph import router as citation_router
+from app.routes.papers import router as papers_router
+
+
 
 
 app = FastAPI()
@@ -21,7 +24,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
+app.include_router(papers_router)
 app.include_router(upload_router)
 app.include_router(chat_router)
 app.include_router(explain_router)

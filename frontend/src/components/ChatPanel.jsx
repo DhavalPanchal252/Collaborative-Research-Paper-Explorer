@@ -72,7 +72,8 @@ export default function ChatPanel({
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
   }
 
-  const isEmpty = messages.length === 0;
+  // 🔥 FIX: prevent crash if messages is undefined
+  const isEmpty = (messages || []).length === 0;
 
   return (
     <div className="chat-panel">
@@ -80,10 +81,15 @@ export default function ChatPanel({
       <div className="chat-header">
         <div className="chat-header-left">
           <span className="chat-paper-icon">📄</span>
-          <span className="chat-paper-name" title={paperName}>
-            {paperName.length > 40 ? paperName.slice(0, 37) + "..." : paperName}
+
+          {/* 🔥 FIX: prevent crash if paperName undefined */}
+          <span className="chat-paper-name" title={paperName || ""}>
+            {(paperName || "").length > 40
+              ? (paperName || "").slice(0, 37) + "..."
+              : (paperName || "")}
           </span>
         </div>
+
         <span className={`chat-model-pill chat-model-pill--${model}`}>
           {model === "groq" ? "⚡ Groq" : "🖥 Ollama"}
         </span>
@@ -104,7 +110,8 @@ export default function ChatPanel({
           </div>
         )}
 
-        {messages.map((msg, i) => (
+        {/* 🔥 FIX: prevent crash if messages undefined */}
+        {(messages || []).map((msg, i) => (
           <ChatMessage
             key={`${msg.role}-${i}-${msg.highlightId ?? "none"}`}
             role={msg.role}

@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 import glob
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, UploadFile, status, Request
 from fastapi.responses import JSONResponse
 
 from app.services import store
@@ -13,12 +13,11 @@ from app.services.pdf_parser import extract_text
 from app.utils.chunker import chunk_text
 from app.routes.chat_routes import _get_or_create_session
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
+# 🔥 NEW IMPORT (ADDED)
+from app.services.supabase_client import supabase
 
-
-
+# 🔥 NEW IMPORTS FOR JWT (ADDED)
+from jose import jwt
 
 
 logger = logging.getLogger(__name__)
@@ -40,7 +39,6 @@ router = APIRouter(prefix="/api/v1", tags=["Upload"])
 # Helpers
 # ---------------------------------------------------------------------------
 def clear_old_pdfs():
-    """Delete all previously uploaded PDFs (MVP = single active paper)."""
     files = glob.glob(str(UPLOAD_DIR / "*.pdf"))
     for f in files:
         try:
@@ -50,7 +48,6 @@ def clear_old_pdfs():
 
 
 def clear_old_figures() -> None:
-    """Delete previously extracted figure images for the next uploaded paper."""
     files = glob.glob(str(FIGURES_DIR / "*"))
     for f in files:
         try:
@@ -61,9 +58,7 @@ def clear_old_figures() -> None:
             logger.warning("Failed to delete figure file %s: %s", f, e)
 
 
-
 def _validate_pdf(file: UploadFile, content: bytes) -> None:
-    """Raise HTTPException if the upload fails basic validation."""
     if file.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
@@ -88,12 +83,9 @@ def _validate_pdf(file: UploadFile, content: bytes) -> None:
             detail="File content does not appear to be a valid PDF.",
         )
 
+
 def _safe_filename(original: str) -> str:
-    """
-    Return a collision-free filename while preserving the original stem
-    for traceability (e.g. 'paper_<uuid>.pdf').
-    """
-    stem = Path(original).stem[:50]          # cap length
+    stem = Path(original).stem[:50]
     stem = "".join(c if c.isalnum() or c in "-_" else "_" for c in stem)
     return f"{stem}_{uuid.uuid4().hex}.pdf"
 
@@ -107,17 +99,8 @@ def _safe_filename(original: str) -> str:
     status_code=status.HTTP_201_CREATED,
     summary="Upload a research-paper PDF and index it for RAG retrieval.",
 )
-async def upload_pdf(file: UploadFile = File(...),session_id: str | None = None) -> JSONResponse:
-    """
-    Pipeline
-    --------
-    1. Validate file type, size and magic bytes.
-    2. Persist the PDF to disk with a collision-safe filename.
-    3. Extract raw text via PyMuPDF.
-    4. Chunk the text and build a FAISS index.
-    5. Write the new index + chunks into the shared in-memory store.
-    6. Return upload metadata to the caller.
-    """
+async def upload_pdf(request: Request, file: UploadFile = File(...), session_id: str | None = None) -> JSONResponse:
+
     logger.info("Received upload request for file: '%s'", file.filename)
 
     # --- 1. Read & validate ------------------------------------------------
@@ -133,7 +116,6 @@ async def upload_pdf(file: UploadFile = File(...),session_id: str | None = None)
     _validate_pdf(file, content)
 
     # --- 1.5 Clean previous upload artifacts -------------------------------
-    # Single-active-paper behavior: remove old PDF and stale extracted figures.
     clear_old_pdfs()
     clear_old_figures()
 
@@ -151,32 +133,68 @@ async def upload_pdf(file: UploadFile = File(...),session_id: str | None = None)
             detail="Failed to save the uploaded file.",
         ) from exc
 
+    # 🔥 NEW: Upload to Supabase Storage (WITH REAL USER FIX)
+    try:
+        # 🔥 Extract real user_id from JWT
+        user_id = "anonymous"
+
+        try:
+            auth_header = request.headers.get("Authorization")
+            if auth_header and auth_header.startswith("Bearer "):
+                token = auth_header.split(" ")[1]
+
+                decoded = jwt.decode(
+                    token,
+                    key="",
+                    options={
+                        "verify_signature": False,
+                        "verify_aud": False
+                    }
+                )
+                user_id = decoded.get("sub", "anonymous")
+
+        except Exception as e:
+            logger.warning("JWT decode failed: %s", e)
+
+        supabase_path = f"{user_id}/{safe_name}"
+
+        supabase.storage.from_("papers").upload(
+            supabase_path,
+            content,
+            {"content-type": file.content_type}
+        )
+
+        # ✅ FIXED URL extraction
+        url_data = supabase.storage.from_("papers").get_public_url(supabase_path)
+        file_url = url_data.get("publicUrl") if isinstance(url_data, dict) else url_data
+
+    except Exception as e:
+        logger.warning("Supabase upload failed: %s", e)
+        file_url = None
+
     # --- 3. Extract text ---------------------------------------------------
     try:
         text: str = extract_text(str(file_path))
     except Exception as exc:
         logger.exception("Text extraction failed for '%s'.", file_path)
-        file_path.unlink(missing_ok=True)   # clean up orphaned file
+        file_path.unlink(missing_ok=True)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Could not extract text from the PDF. The file may be scanned or corrupted.",
+            detail="Could not extract text from the PDF.",
         ) from exc
 
     if not text.strip():
         file_path.unlink(missing_ok=True)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="No extractable text found. The PDF may contain only images.",
+            detail="No extractable text found.",
         )
 
     # --- 4. Chunk & embed --------------------------------------------------
     try:
         chunks: list[str] = chunk_text(text)
         if not chunks:
-            raise HTTPException(
-                status_code=500,
-                detail="Chunking failed",
-            )
+            raise HTTPException(status_code=500, detail="Chunking failed")
         index, _ = create_vector_store(chunks)
     except Exception as exc:
         logger.exception("Embedding/indexing failed for '%s'.", file_path)
@@ -186,21 +204,28 @@ async def upload_pdf(file: UploadFile = File(...),session_id: str | None = None)
         ) from exc
 
     # --- 5. Update shared store --------------------------------------------
-   
     session_id, session = _get_or_create_session(session_id)
 
-    # 🔥 CACHE INVALIDATION: clear old figures when new PDF is uploaded
     session.pop("figures", None)
 
     session["chunks"] = chunks
     session["index"] = index
-    session["pdf_path"] = str(file_path)           # Phase 7.2 — figure extraction
+    session["pdf_path"] = str(file_path)
+
+    # 🔥 NEW: Save metadata in Supabase DB
+    try:
+        supabase.table("papers").insert({
+            "user_id": user_id,
+            "title": file.filename,
+            "file_url": file_url
+        }).execute()
+    except Exception as e:
+        logger.warning("DB insert failed: %s", e)
 
     logger.info(
         "Indexed '%s': %d chunks stored.", safe_name, len(chunks)
     )
 
-    
     # --- 6. Respond --------------------------------------------------------
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,
@@ -208,7 +233,7 @@ async def upload_pdf(file: UploadFile = File(...),session_id: str | None = None)
             "message": "PDF uploaded and indexed successfully.",
             "original_filename": file.filename,
             "stored_as": safe_name,
-            "session_id" : session_id,
+            "session_id": session_id,
             "chunks_created": len(chunks),
             "file_size_bytes": len(content),
         },

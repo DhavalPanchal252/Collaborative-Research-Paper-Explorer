@@ -1,15 +1,23 @@
+import { supabase } from "../supabase";  // 👈 ADD THIS
+
 const BASE_URL = "";
-/**
- * Upload a PDF file to the backend.
- * @param {File} file
- * @returns {Promise<{ filename: string, stored_as: string, chunks_created: number, file_size_bytes: number }>}
- */
+
 export async function uploadPDF(file) {
   const formData = new FormData();
   formData.append("file", file);
 
+  // 🔥 GET CURRENT SESSION
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+
+  const token = session?.access_token;
+
   const res = await fetch(`${BASE_URL}/api/v1/upload`, {
     method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,   // 🔥 THIS IS THE KEY LINE
+    },
     body: formData,
   });
 
@@ -18,15 +26,12 @@ export async function uploadPDF(file) {
     try {
       const err = await res.json();
       message = err.detail ?? message;
-    } catch {
-      // ignore parse error
-    }
+    } catch {}
     throw new Error(message);
   }
 
   const data = await res.json();
 
-  // save session_id globally
   localStorage.setItem("session_id", data.session_id);
 
   return data;
