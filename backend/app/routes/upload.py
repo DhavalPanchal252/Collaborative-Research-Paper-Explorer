@@ -133,9 +133,8 @@ async def upload_pdf(request: Request, file: UploadFile = File(...), session_id:
             detail="Failed to save the uploaded file.",
         ) from exc
 
-    # 🔥 NEW: Upload to Supabase Storage (WITH REAL USER FIX)
+    # 🔥 Upload to Supabase Storage
     try:
-        # 🔥 Extract real user_id from JWT
         user_id = "anonymous"
 
         try:
@@ -164,7 +163,6 @@ async def upload_pdf(request: Request, file: UploadFile = File(...), session_id:
             {"content-type": file.content_type}
         )
 
-        # ✅ FIXED URL extraction
         url_data = supabase.storage.from_("papers").get_public_url(supabase_path)
         file_url = url_data.get("publicUrl") if isinstance(url_data, dict) else url_data
 
@@ -193,26 +191,41 @@ async def upload_pdf(request: Request, file: UploadFile = File(...), session_id:
     # --- 4. Chunk & embed --------------------------------------------------
     try:
         chunks: list[str] = chunk_text(text)
+
         if not chunks:
             raise HTTPException(status_code=500, detail="Chunking failed")
-        index, _ = create_vector_store(chunks)
+
+        # 🔥 HF-based embeddings (NO FAISS)
+        _, embeddings = create_vector_store(chunks)
+
     except Exception as exc:
         logger.exception("Embedding/indexing failed for '%s'.", file_path)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to build the vector index.",
+            detail="Failed to build embeddings.",
         ) from exc
 
-    # --- 5. Update shared store --------------------------------------------
+    # --- 5. Update session store -------------------------------------------
     session_id, session = _get_or_create_session(session_id)
 
     session.pop("figures", None)
 
     session["chunks"] = chunks
-    session["index"] = index
+    session["embeddings"] = embeddings.tolist()   # 🔥 IMPORTANT CHANGE
+    # 🔥 SAVE CHUNKS + EMBEDDINGS TO DB
+
+    try:
+        for chunk, emb in zip(chunks, embeddings):
+            supabase.table("paper_chunks").insert({
+                "paper_id": safe_name,   # or use actual paper_id if available
+                "content": chunk,
+                "embedding": emb.tolist()
+            }).execute()
+    except Exception as e:
+        logger.warning("Chunk DB insert failed: %s", e)
     session["pdf_path"] = str(file_path)
 
-    # 🔥 NEW: Save metadata in Supabase DB
+    # 🔥 Save metadata in Supabase DB
     try:
         supabase.table("papers").insert({
             "user_id": user_id,

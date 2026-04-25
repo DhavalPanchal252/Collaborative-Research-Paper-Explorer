@@ -22,6 +22,7 @@ Pipeline (per request)
 import logging
 import uuid
 from collections import deque
+import numpy as np  # 🔥 ADDED
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
@@ -30,6 +31,9 @@ from app.services import store
 from app.services.retriever import retrieve_chunks
 from app.services.llm.factory import get_llm
 from app.services.llm.llm_utils import build_prompt, is_casual, get_casual_reply
+
+# 🔥 NEW IMPORT
+from app.services.embedding import get_embeddings
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +58,7 @@ def _get_or_create_session(session_id: str | None):
         _sessions[session_id] = {
             "history": deque(maxlen=MAX_HISTORY_MESSAGES),
             "chunks": None,
-            "index": None
+            "embeddings": None   # 🔥 CHANGED (was index)
         }
 
         _turn_counters[session_id] = 0
@@ -144,7 +148,6 @@ async def chat(request: ChatRequest) -> ChatResponse:
     )
 
     # --- 2. Casual short-circuit ------------------------------------------
-    # "ok", "thanks", "great" etc. — no RAG needed, just acknowledge.
     if is_casual(request.question):
         reply = get_casual_reply(turn)
         _save_turn(history, session_id, request.question, reply)
@@ -152,7 +155,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
         return ChatResponse(answer=reply, session_id=session_id, chunks_used=0)
 
     # --- 3. Guard: paper must be uploaded ---------------------------------
-    if session["chunks"] is None or session["index"] is None:
+    if session["chunks"] is None or session.get("embeddings") is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No paper uploaded yet. Please upload a PDF first.",
@@ -163,11 +166,21 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
     # --- 5. Retrieve ------------------------------------------------------
     try:
-        chunks = retrieve_chunks(
-        query=enriched,  # FIX variable name
-        chunks=session["chunks"],
-        index=session["index"],
-    )
+        # 🔥 REPLACED FAISS WITH COSINE SIMILARITY
+
+        query_embedding = np.array(get_embeddings([enriched])[0])
+        stored_embeddings = np.array(session["embeddings"])
+
+        similarities = np.dot(stored_embeddings, query_embedding) / (
+            np.linalg.norm(stored_embeddings, axis=1) *
+            np.linalg.norm(query_embedding)
+        )
+
+        top_k = 3
+        top_indices = np.argsort(similarities)[-top_k:][::-1]
+
+        chunks = [session["chunks"][i] for i in top_indices]
+
     except Exception as exc:
         logger.exception("Retrieval error.")
         raise HTTPException(
@@ -198,7 +211,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
         prompt = build_prompt(
             question=request.question,
             context="\n\n".join(chunks),
-            history=list(history),      # snapshot before this turn is appended
+            history=list(history),
         )
         answer: str = llm(prompt=prompt)
     except Exception as exc:
