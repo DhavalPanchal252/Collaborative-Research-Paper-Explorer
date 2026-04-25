@@ -6939,3 +6939,12 @@ textarea { font-family: inherit; font-size: inherit; }
   .hs-action-chips { flex-direction: column; }
   .hs-hero-stats { width: 100%; }
 }
+.hs-root::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,..."); /* SVG noise */
+  opacity: 0.028;
+  pointer-events: none;
+  z-index: 0;
+}

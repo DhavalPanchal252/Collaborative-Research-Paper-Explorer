@@ -113,15 +113,6 @@ export default function EmptyState() {
           then explains each one in plain English grounded in the paper's own context.
         </p>
 
-        {/* Stats row */}
-        <div className="hs-hero-stats">
-          <StatItem num="14+" label="Figures Extracted" delay={0} />
-          <span className="hs-stat-divider" aria-hidden="true" />
-          <StatItem num="~2s" label="Per Explanation" delay={80} />
-          <span className="hs-stat-divider" aria-hidden="true" />
-          <StatItem num="94%" label="Avg. Confidence" delay={160} />
-        </div>
-
       </header>
 
       {/* ══════════════════════════════════════════════════════════════════════
