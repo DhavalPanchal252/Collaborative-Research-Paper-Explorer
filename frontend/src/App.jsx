@@ -28,6 +28,7 @@ export default function App() {
   const [explainResult, setExplainResult]     = useState(null);
 
   const [viewMode, setViewMode] = useState("pdf");
+  const [targetPage, setTargetPage] = useState(null);
 
   // 🔥 NEW STATES
   const [sessionId, setSessionId] = useState(null);
