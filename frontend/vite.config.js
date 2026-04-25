@@ -13,23 +13,34 @@ export default defineConfig({
   },
 
   build: {
-    // Raise the inline-asset limit slightly so small SVGs don't stay as
-    // separate requests (default is 4 kB)
     assetsInlineLimit: 8192,
 
     rollupOptions: {
       output: {
-        manualChunks: {
-          // React runtime — cached forever, changes rarely
-          "vendor-react": ["react", "react-dom"],
+        manualChunks(id) {
+          // React core (rarely changes → great for caching)
+          if (id.includes("react") || id.includes("react-dom")) {
+            return "vendor-react";
+          }
 
-          // PDF.js is enormous; isolate it so users who only chat never pay
-          // the cost of loading it
-          "vendor-pdfjs": ["pdfjs-dist"],
+          // PDF.js (very heavy)
+          if (id.includes("pdfjs-dist")) {
+            return "vendor-pdfjs";
+          }
 
-          // Force graph is heavy (d3 + canvas rendering); only loaded on the
-          // citation tab
-          "vendor-graph": ["react-force-graph-2d", "d3-force", "d3-selection"],
+          // Graph libraries (only for citation view)
+          if (
+            id.includes("react-force-graph-2d") ||
+            id.includes("d3-force") ||
+            id.includes("d3-selection")
+          ) {
+            return "vendor-graph";
+          }
+
+          // Everything else from node_modules
+          if (id.includes("node_modules")) {
+            return "vendor-misc";
+          }
         },
       },
     },
