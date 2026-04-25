@@ -5648,3 +5648,632 @@ textarea { font-family: inherit; font-size: inherit; }
   .hs-fig-grid { grid-template-columns: 1fr; }
   .hs-hero-headline { font-size: 26px; }
 }
+
+/* ------------------------------------------------------------------------------
+   PHASE UX — PREMIUM PRODUCTION UPGRADE
+   Appended at bottom — all rules override via cascade position.
+   Zero existing rules modified. All additive.
+   ------------------------------------------------------------------------------ */
+
+/* -- New design tokens --------------------------------------------------------- */
+:root {
+  --shadow-sm:  0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08);
+  --shadow-md:  0 4px 14px rgba(0,0,0,0.25), 0 2px 6px rgba(0,0,0,0.15);
+  --shadow-lg:  0 12px 40px rgba(0,0,0,0.35), 0 4px 12px rgba(0,0,0,0.20);
+  --glow-accent: 0 0 12px rgba(232,160,74,0.25);
+  --glow-ai:    0 0 12px rgba(90,190,255,0.20);
+  --transition-fast: 120ms ease;
+  --transition-med:  180ms ease;
+  --transition-slow: 280ms ease;
+}
+[data-theme= light] {
+  --shadow-sm:  0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md:  0 4px 14px rgba(0,0,0,0.10), 0 2px 6px rgba(0,0,0,0.06);
+  --shadow-lg:  0 12px 40px rgba(0,0,0,0.12), 0 4px 12px rgba(0,0,0,0.08);
+  --glow-accent: 0 0 12px rgba(181,114,26,0.15);
+  --glow-ai:    0 0 12px rgba(60,140,220,0.15);
+}
+
+/* ------------------------------------------------------------------------------
+   1. VISUAL HIERARCHY — depth & layers
+   ------------------------------------------------------------------------------ */
+
+.sidebar {
+  box-shadow: inset -1px 0 0 var(--border), 1px 0 8px rgba(0,0,0,0.15);
+  transition: box-shadow var(--transition-med);
+}
+[data-theme=light] .sidebar {
+  box-shadow: inset -1px 0 0 var(--border), 2px 0 10px rgba(0,0,0,0.05);
+}
+
+.sidebar-section {
+  padding: 22px 18px 18px;
+  transition: background var(--transition-med);
+}
+
+.section-label {
+  position: relative;
+  padding-left: 10px;
+  transition: color var(--transition-fast);
+}
+.section-label::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0.5;
+  transition: opacity var(--transition-fast), height var(--transition-fast);
+}
+.sidebar-section:hover .section-label::before {
+  opacity: 1;
+  height: 16px;
+}
+
+/* Paper-chat panel left glow when AI is active */
+.paper-chat {
+  transition: box-shadow var(--transition-slow);
+  border-left: 1px solid var(--border);
+}
+
+/* ------------------------------------------------------------------------------
+   2. PDF VIEWER ENHANCEMENTS
+   ------------------------------------------------------------------------------ */
+
+/* Floating zoom badge */
+.pdf-zoom-badge {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  z-index: 30;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: rgba(22,22,24,0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 10px;
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+  animation: zoom-badge-in 200ms cubic-bezier(0.16,1,0.3,1) both;
+}
+[data-theme=light] .pdf-zoom-badge {
+  background: rgba(255,255,255,0.80);
+  border-color: rgba(0,0,0,0.08);
+  color: var(--text);
+}
+@keyframes zoom-badge-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.92); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Explaining indicator near highlight */
+.pdf-explaining-indicator {
+  position: absolute;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px 4px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--font-mono);
+  color: var(--accent);
+  background: rgba(22,22,24,0.85);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(232,160,74,0.30);
+  border-radius: 8px;
+  box-shadow: var(--glow-accent), var(--shadow-sm);
+  pointer-events: none;
+  white-space: nowrap;
+  animation: explaining-pop 220ms cubic-bezier(0.16,1,0.3,1) both;
+}
+[data-theme=light] .pdf-explaining-indicator {
+  background: rgba(255,255,255,0.90);
+  border-color: rgba(181,114,26,0.30);
+}
+@keyframes explaining-pop {
+  from { opacity: 0; transform: translateX(-4px) scale(0.9); }
+  to   { opacity: 1; transform: translateX(0) scale(1); }
+}
+.pdf-explaining-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: explaining-pulse 1s ease-in-out infinite;
+}
+@keyframes explaining-pulse {
+  0%, 100% { opacity: 0.4; transform: scale(0.85); }
+  50%      { opacity: 1;   transform: scale(1.15); }
+}
+
+/* Enhanced highlight entrance with glow burst */
+@keyframes highlight-in-v3 {
+  0%   { opacity: 0; transform: translateZ(0) scaleX(0.92); box-shadow: 0 0 0 0 rgba(255,213,50,0); }
+  50%  { opacity: 1; transform: translateZ(0) scaleX(1);    box-shadow: 0 0 8px 2px rgba(255,213,50,0.35); }
+  100% { opacity: 1; transform: translateZ(0) scaleX(1);    box-shadow: none; }
+}
+.pdf-highlight {
+  animation: highlight-in-v3 400ms ease-out both;
+}
+
+/* Explaining state — pulsing accent glow */
+.pdf-highlight--explaining {
+  background: rgba(232,160,74,0.35) !important;
+  box-shadow: 0 0 0 2px rgba(232,160,74,0.45), 0 0 16px rgba(232,160,74,0.20) !important;
+  animation: highlight-explaining 1.2s ease-in-out infinite !important;
+}
+@keyframes highlight-explaining {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(232,160,74,0.35), 0 0 10px rgba(232,160,74,0.12); }
+  50%      { box-shadow: 0 0 0 3px rgba(232,160,74,0.55), 0 0 20px rgba(232,160,74,0.25); }
+}
+
+/* ------------------------------------------------------------------------------
+   3. HIGHLIGHT ? AI CONNECTION
+   ------------------------------------------------------------------------------ */
+
+/* Chat panel left glow when AI is actively analyzing */
+.chat-panel--ai-active {
+  box-shadow: inset 3px 0 0 rgba(232,160,74,0.5), inset 3px 0 16px rgba(232,160,74,0.08);
+  transition: box-shadow var(--transition-slow);
+}
+
+/* AI Analyzing message */
+.chat-analyzing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  font-size: 12.5px;
+  color: var(--accent);
+  background: rgba(232,160,74,0.06);
+  border: 1px solid rgba(232,160,74,0.18);
+  border-radius: var(--radius-lg);
+  border-bottom-left-radius: 4px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  animation: analyzing-fade 300ms ease both;
+}
+@keyframes analyzing-fade {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.chat-analyzing-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: explaining-pulse 1s ease-in-out infinite;
+}
+.chat-analyzing-entry {
+  animation: fadeUp 250ms ease both;
+}
+
+/* Explain entry animation in chat */
+.chat-message--explain-entry {
+  animation: explain-slide-in 350ms cubic-bezier(0.16,1,0.3,1) both;
+}
+@keyframes explain-slide-in {
+  from { opacity: 0; transform: translateX(-8px) translateY(4px); }
+  to   { opacity: 1; transform: translateX(0) translateY(0); }
+}
+
+/* Explain-sourced AI bubble — accent left border */
+.msg-bubble--explain {
+  border-left: 3px solid rgba(232,160,74,0.55);
+  background: rgba(232,160,74,0.03);
+}
+.msg-bubble--explain.msg-bubble--ai {
+  border-color: var(--border);
+  border-left-color: rgba(232,160,74,0.55);
+}
+
+/* Typing cursor animation */
+.msg-content--typing::after {
+  content: '?';
+  display: inline;
+  color: var(--accent);
+  animation: cursor-blink 0.6s steps(2) infinite;
+  font-weight: 300;
+  margin-left: 1px;
+}
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0; }
+}
+
+/* ------------------------------------------------------------------------------
+   4. AI PANEL UPGRADE
+   ------------------------------------------------------------------------------ */
+
+/* Refined chat header */
+.chat-header {
+  padding: 10px 20px;
+  background: linear-gradient(180deg, var(--surface) 0%, var(--surface) 80%, transparent 100%);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.chat-header-ai-icon {
+  font-size: 18px;
+  color: var(--accent);
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(232,160,74,0.10);
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+.chat-header-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.chat-header-ai-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+/* Improved suggestion chips */
+.suggestion-chip {
+  transition: all var(--transition-med);
+  position: relative;
+}
+.suggestion-chip:hover {
+  border-color: var(--accent-dim);
+  color: var(--text);
+  background: rgba(232,160,74,0.06);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+.suggestion-chip:active {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+/* AI message bubble gradient */
+.msg-bubble--ai {
+  background: linear-gradient(135deg, var(--ai-bg) 0%, rgba(90,190,255,0.02) 100%);
+  border-color: var(--border);
+}
+
+/* ------------------------------------------------------------------------------
+   5. ANNOTATION MODAL POLISH
+   ------------------------------------------------------------------------------ */
+
+.annotation-popup--v2 {
+  width: 340px;
+  gap: 14px;
+  padding: 18px;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255,255,255,0.08);
+  box-shadow:
+    0 20px 60px rgba(0,0,0,0.55),
+    0 8px 24px rgba(0,0,0,0.35),
+    0 0 0 1px rgba(255,255,255,0.05);
+}
+[data-theme=light] .annotation-popup--v2 {
+  border-color: rgba(0,0,0,0.08);
+  box-shadow:
+    0 20px 60px rgba(0,0,0,0.12),
+    0 8px 24px rgba(0,0,0,0.08),
+    0 0 0 1px rgba(0,0,0,0.04);
+}
+
+.annotation-popup-header {
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.annotation-popup-label {
+  font-size: 12px;
+  letter-spacing: 0.8px;
+}
+
+/* Quote with gradient border */
+.annotation-popup-quote {
+  padding: 8px 12px;
+  background: linear-gradient(135deg, rgba(255,200,50,0.04) 0%, transparent 100%);
+  border-left: 3px solid rgba(255,200,50,0.50);
+  border-radius: 0 6px 6px 0;
+}
+
+/* Primary save button */
+.annotation-btn--save {
+  background: rgba(232,160,74,0.18);
+  border-color: rgba(232,160,74,0.40);
+  color: var(--accent);
+  font-weight: 600;
+  padding: 8px 14px;
+}
+.annotation-btn--save:hover {
+  background: rgba(232,160,74,0.28);
+  border-color: rgba(232,160,74,0.60);
+  box-shadow: var(--glow-accent);
+}
+
+/* Delete button danger hover */
+.annotation-btn--delete {
+  padding: 8px 14px;
+}
+.annotation-btn--delete:hover {
+  background: rgba(224,92,92,0.12);
+  border-color: rgba(224,92,92,0.45);
+  color: var(--red);
+}
+
+/* Button press feedback */
+.annotation-btn:active {
+  transform: scale(0.96);
+  transition: transform 80ms ease;
+}
+
+.annotation-btn--save:disabled {
+  opacity: 0.30;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* ------------------------------------------------------------------------------
+   6. MICRO-INTERACTIONS
+   ------------------------------------------------------------------------------ */
+
+/* Global button press feedback */
+.pdf-tool-btn:active,
+.note-action-btn:active,
+.suggestion-chip:active,
+.notes-filter-pill:active,
+.fig-filter-pill:active,
+.app-header-tab:active,
+.theme-toggle-btn:active {
+  transform: scale(0.95);
+  transition: transform 80ms ease;
+}
+
+/* Send button press */
+.send-btn:active:not(:disabled) {
+  transform: scale(0.92);
+  transition: transform 80ms ease;
+}
+
+/* Send button ready glow */
+.send-btn--ready {
+  box-shadow: 0 0 10px rgba(232,160,74,0.30), 0 0 3px rgba(232,160,74,0.15);
+}
+.send-btn--ready:hover {
+  box-shadow: 0 0 14px rgba(232,160,74,0.40), 0 0 4px rgba(232,160,74,0.20);
+}
+
+/* Focus-visible rings for keyboard nav */
+.pdf-tool-btn:focus-visible,
+.annotation-btn:focus-visible,
+.send-btn:focus-visible,
+.note-action-btn:focus-visible,
+.suggestion-chip:focus-visible,
+.app-header-tab:focus-visible,
+.theme-toggle-btn:focus-visible,
+.chat-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Smooth hover for all interactive elements */
+.note-item {
+  transition: all var(--transition-med);
+}
+
+/* Hover elevation on note items */
+.note-item:hover {
+  background: var(--surface-2);
+  box-shadow: var(--shadow-sm);
+  border-left: 2px solid rgba(232,160,74,0.35);
+  padding-left: 10px;
+}
+
+/* ------------------------------------------------------------------------------
+   7. NOTES PANEL REFINEMENT
+   ------------------------------------------------------------------------------ */
+
+/* Active note — stronger visual */
+.note-item.active {
+  background: rgba(232,160,74,0.06);
+  border-left: 3px solid var(--accent);
+  padding-left: 9px;
+  box-shadow: inset 0 0 0 1px rgba(232,160,74,0.08);
+}
+
+/* Better timestamp */
+.note-item-time {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text-3);
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.note-time-icon {
+  font-size: 9px;
+  opacity: 0.7;
+}
+
+/* Hover expand quote — remove line clamp on hover */
+.note-item:hover .note-item-quote {
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+}
+
+/* ------------------------------------------------------------------------------
+   8. CHAT INPUT — ChatGPT-style
+   ------------------------------------------------------------------------------ */
+
+.chat-input {
+  border-radius: 14px;
+  padding: 11px 16px;
+  border: 1.5px solid var(--border);
+  transition: border-color var(--transition-med), box-shadow var(--transition-med);
+}
+.chat-input:focus {
+  outline: none;
+  border-color: var(--accent-dim);
+  box-shadow: 0 0 0 3px rgba(232,160,74,0.12);
+}
+[data-theme=light] .chat-input:focus {
+  box-shadow: 0 0 0 3px rgba(181,114,26,0.10);
+}
+
+.send-btn {
+  border-radius: 12px;
+  transition: all var(--transition-med);
+}
+
+/* Input bar top gradient instead of hard line */
+.chat-input-bar {
+  border-top: none;
+  background: linear-gradient(180deg, transparent 0%, var(--surface) 8%, var(--surface) 100%);
+  padding: 16px 20px 20px;
+  box-shadow: 0 -4px 12px rgba(0,0,0,0.06);
+  position: relative;
+}
+.chat-input-bar::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 20px;
+  right: 20px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border), transparent);
+}
+
+/* ------------------------------------------------------------------------------
+   9. CONSISTENCY PASS
+   ------------------------------------------------------------------------------ */
+
+/* Standardize transitions globally */
+.sidebar-section,
+.paper-info,
+.section-item,
+.note-item,
+.chat-header,
+.pdf-toolbar--v2 {
+  transition: background var(--transition-med), box-shadow var(--transition-med);
+}
+
+/* Consistent border-radius */
+.paper-info {
+  border-radius: var(--radius);
+}
+
+.notes-search-wrap {
+  border-radius: 8px;
+}
+
+/* ------------------------------------------------------------------------------
+   10. PERFORMANCE FEEL — skeleton & smooth entrance
+   ------------------------------------------------------------------------------ */
+
+/* Generic skeleton loader */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--surface-2) 25%,
+    var(--border) 50%,
+    var(--surface-2) 75%
+  );
+  background-size: 300% 100%;
+  animation: skeleton-wave 1.8s ease-in-out infinite;
+  border-radius: 4px;
+}
+.skeleton--text { height: 12px; width: 80%; }
+.skeleton--text-sm { height: 10px; width: 60%; }
+
+/* Content entrance */
+@keyframes content-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.sidebar-section {
+  animation: content-enter 300ms ease both;
+}
+.sidebar-section:nth-child(2) { animation-delay: 50ms; }
+.sidebar-section:nth-child(3) { animation-delay: 100ms; }
+.sidebar-section:nth-child(4) { animation-delay: 150ms; }
+
+/* Chat messages smooth scroll */
+.chat-messages {
+  scroll-behavior: smooth;
+  overscroll-behavior: contain;
+}
+
+/* Prevent layout jumps on scrollbar appear */
+.pdf-scroll-area {
+  scrollbar-gutter: stable;
+}
+
+/* ------------------------------------------------------------------------------
+   LIGHT THEME — new rule overrides
+   ------------------------------------------------------------------------------ */
+
+[data-theme=light] .pdf-explaining-indicator {
+  background: rgba(255,255,255,0.92);
+  border-color: rgba(181,114,26,0.25);
+}
+
+[data-theme=light] .chat-panel--ai-active {
+  box-shadow: inset 3px 0 0 rgba(181,114,26,0.35), inset 3px 0 12px rgba(181,114,26,0.05);
+}
+
+[data-theme=light] .chat-analyzing {
+  background: rgba(181,114,26,0.05);
+  border-color: rgba(181,114,26,0.15);
+}
+
+[data-theme=light] .msg-bubble--explain {
+  border-left-color: rgba(181,114,26,0.45);
+  background: rgba(181,114,26,0.03);
+}
+
+[data-theme=light] .chat-input-bar {
+  box-shadow: 0 -4px 12px rgba(0,0,0,0.03);
+}
+
+[data-theme=light] .chat-header {
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+
+[data-theme=light] .note-item:hover {
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
+
+[data-theme=light] .pdf-highlight--explaining {
+  background: rgba(181,114,26,0.25) !important;
+  box-shadow: 0 0 0 2px rgba(181,114,26,0.35), 0 0 12px rgba(181,114,26,0.12) !important;
+}
+
+[data-theme=light] .send-btn--ready {
+  box-shadow: 0 0 8px rgba(181,114,26,0.20);
+}
+
+[data-theme=light] .pdf-viewer {
+  background: #e8e6e0;
+}
+
+[data-theme=light] .pdf-scroll-area {
+  background: #e8e6e0;
+}

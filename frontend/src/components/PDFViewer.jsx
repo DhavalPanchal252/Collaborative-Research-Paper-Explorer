@@ -462,6 +462,7 @@ function HighlightLayer({
   erasingIds,        // Set<id> — highlights targeted by current drag
   onEraseHover,      // (id) => void — mouse enter in clear mode
   onEraseLeave,      // (id) => void — mouse leave in clear mode
+  explainLoadingId,  // id | null — highlight currently being explained
 }) {
   // hoveredId — tracks which highlight the cursor is currently over.
   // Used to apply the --hovered class to ALL rects of that highlight
@@ -494,6 +495,8 @@ function HighlightLayer({
             isDragTarget    ? "pdf-highlight--erase-target" : "",
             // Group hover — applied to ALL rects when any rect in this highlight is hovered
             hoveredId === h.id ? "pdf-highlight--hovered" : "",
+            // UX Upgrade: pulsing glow while AI is explaining this highlight
+            explainLoadingId === h.id ? "pdf-highlight--explaining" : "",
           ].filter(Boolean).join(" ");
 
           // Every rect in a multi-line highlight is interactive in select mode —
@@ -609,6 +612,7 @@ export default function PDFViewer({
   const [activeHighlight, setActiveHighlight] = useState(null);
   const [flashingId, setFlashingId]           = useState(null);
   const [downloadPhase, setDownloadPhase]     = useState(null); // null | "loading" | "drawing" | "saving"
+  const [showZoomBadge, setShowZoomBadge]     = useState(false);
 
   // ── [Phase 5] New state ──────────────────────────────────────────────────
   const [annotations, setAnnotations]         = useState([]);
@@ -660,6 +664,14 @@ export default function PDFViewer({
   useEffect(() => { modeRef.current        = mode;            }, [mode]);
   useEffect(() => { erasingIdsRef.current  = erasingIds;      }, [erasingIds]);
   useEffect(() => () => clearTimeout(explainTimeoutRef.current), []);
+
+  // ── Zoom badge auto-show/hide ─────────────────────────────────────────────
+  useEffect(() => {
+    if (zoom === 1) { setShowZoomBadge(false); return; }
+    setShowZoomBadge(true);
+    const t = setTimeout(() => setShowZoomBadge(false), 2200);
+    return () => clearTimeout(t);
+  }, [zoom]);
 
   // ── Mirror highlights to parent (NotesPanel source of truth) ─────────────
   useEffect(() => { onHighlightsChange?.(highlights); }, [highlights]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1386,6 +1398,7 @@ export default function PDFViewer({
           erasingIds={erasingIds}
           onEraseHover={handleEraseHover}
           onEraseLeave={handleEraseLeave}
+          explainLoadingId={explainLoading ? pendingExplainIdRef.current : null}
         />
 
         {/* [Phase 6] Drag-to-erase selection rectangle */}
@@ -1399,6 +1412,35 @@ export default function PDFViewer({
           zoom={zoom}
           scrollAreaRef={scrollAreaRef}
         />
+
+        {/* UX Upgrade: Floating zoom badge */}
+        {showZoomBadge && (
+          <div className="pdf-zoom-badge">
+            {Math.round(zoom * 100)}%
+          </div>
+        )}
+
+        {/* UX Upgrade: Explaining indicator near active highlight */}
+        {explainLoading && pendingExplainIdRef.current && (() => {
+          const h = highlights.find(hl => hl.id === pendingExplainIdRef.current);
+          if (!h || !h.rects?.[0] || !scrollAreaRef.current) return null;
+          const r = h.rects[0];
+          const z = zoom || 1;
+          const cx = getPageCenterX(scrollAreaRef.current);
+          const py = 24;
+          return (
+            <div
+              className="pdf-explaining-indicator"
+              style={{
+                left: Math.round(cx + (r.x + r.width - cx) * z) + 8,
+                top:  Math.round(py + (r.y - py) * z),
+              }}
+            >
+              <span className="pdf-explaining-dot" />
+              ✦ Explaining…
+            </div>
+          );
+        })()}
       </div>
 
       {/* Highlight annotation popup */}

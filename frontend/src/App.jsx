@@ -232,6 +232,7 @@ export default function App() {
                   injectMessage={injectMessage}
                   onInjectConsumed={handleInjectConsumed}
                   onHighlightClick={handleHighlightFocus}
+                  explainLoading={explainLoading}
                 />
               </div>
             </>

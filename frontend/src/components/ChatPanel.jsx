@@ -1,6 +1,7 @@
 // src/components/ChatPanel.jsx
 // Phase 4+: messages now carry highlightId for bidirectional PDF linking.
 // onHighlightClick prop is threaded through to ChatMessage.
+// UX Upgrade: explainLoading indicator, improved input, AI header.
 
 import { useState, useRef, useEffect } from "react";
 import { sendQuestion } from "../api/chat";
@@ -19,6 +20,7 @@ export default function ChatPanel({
   injectMessage,       // { question, answer, highlightId? } | null
   onInjectConsumed,    // () => void
   onHighlightClick,    // (highlightId: number) => void  ← Phase 4+ bidirectional link
+  explainLoading,      // boolean — true when AI is analyzing a selection
 }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput]       = useState("");
@@ -29,7 +31,7 @@ export default function ChatPanel({
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, loading]);
+  }, [messages, loading, explainLoading]);
 
   // Consume injected explain messages (from PDF selection)
   // highlightId is stored on the assistant message for chat → PDF linking
@@ -75,18 +77,18 @@ export default function ChatPanel({
   const isEmpty = messages.length === 0;
 
   return (
-    <div className="chat-panel">
+    <div className={`chat-panel${explainLoading ? " chat-panel--ai-active" : ""}`}>
       {/* Header */}
       <div className="chat-header">
         <div className="chat-header-left">
-          <span className="chat-paper-icon">📄</span>
-          <span className="chat-paper-name" title={paperName}>
-            {paperName.length > 40 ? paperName.slice(0, 37) + "..." : paperName}
-          </span>
+          <span className="chat-header-ai-icon">◈</span>
+          <div className="chat-header-titles">
+            <span className="chat-header-ai-label">ArxivMind AI</span>
+            <span className="chat-paper-name" title={paperName}>
+              {paperName.length > 40 ? paperName.slice(0, 37) + "..." : paperName}
+            </span>
+          </div>
         </div>
-        {/* <span className={`chat-model-pill chat-model-pill--${model}`}>
-          {model === "groq" ? "⚡ Groq" : "🖥 Ollama"}
-        </span> */}
       </div>
 
       {/* Messages */}
@@ -115,7 +117,18 @@ export default function ChatPanel({
           />
         ))}
 
-        {loading && (
+        {/* AI Analyzing indicator — appears while selection is being explained */}
+        {explainLoading && (
+          <div className="chat-message chat-message--assistant chat-analyzing-entry">
+            <div className="msg-avatar msg-avatar--ai">◈</div>
+            <div className="chat-analyzing">
+              <span className="chat-analyzing-dot" />
+              <span>Analyzing your selection…</span>
+            </div>
+          </div>
+        )}
+
+        {loading && !explainLoading && (
           <div className="chat-message chat-message--assistant">
             <div className="msg-avatar msg-avatar--ai">◈</div>
             <div className="msg-bubble msg-bubble--loading">
@@ -136,7 +149,7 @@ export default function ChatPanel({
         <textarea
           ref={inputRef}
           className="chat-input"
-          placeholder="Ask a question about this paper…"
+          placeholder="Ask about this paper…"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKeyDown}
@@ -144,7 +157,7 @@ export default function ChatPanel({
           disabled={loading}
         />
         <button
-          className="send-btn"
+          className={`send-btn${input.trim() && !loading ? " send-btn--ready" : ""}`}
           onClick={() => handleSend()}
           disabled={!input.trim() || loading}
           aria-label="Send"
