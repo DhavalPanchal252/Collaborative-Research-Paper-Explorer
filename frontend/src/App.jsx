@@ -354,7 +354,7 @@ export default function App() {
           <span className="status-text">No paper loaded</span>
         </div>
       </aside>
-      <div className="workspace"><EmptyState /></div>
+      <div className="workspace workspace--home"><EmptyState /></div>
     </div>
   );
 }

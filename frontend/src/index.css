@@ -5650,8 +5650,8 @@ textarea { font-family: inherit; font-size: inherit; }
 }
 
 /* ------------------------------------------------------------------------------
-   PHASE UX — PREMIUM PRODUCTION UPGRADE
-   Appended at bottom — all rules override via cascade position.
+   PHASE UX ï¿½ PREMIUM PRODUCTION UPGRADE
+   Appended at bottom ï¿½ all rules override via cascade position.
    Zero existing rules modified. All additive.
    ------------------------------------------------------------------------------ */
 
@@ -5675,7 +5675,7 @@ textarea { font-family: inherit; font-size: inherit; }
 }
 
 /* ------------------------------------------------------------------------------
-   1. VISUAL HIERARCHY — depth & layers
+   1. VISUAL HIERARCHY ï¿½ depth & layers
    ------------------------------------------------------------------------------ */
 
 .sidebar {
@@ -5807,7 +5807,7 @@ textarea { font-family: inherit; font-size: inherit; }
   animation: highlight-in-v3 400ms ease-out both;
 }
 
-/* Explaining state — pulsing accent glow */
+/* Explaining state ï¿½ pulsing accent glow */
 .pdf-highlight--explaining {
   background: rgba(232,160,74,0.35) !important;
   box-shadow: 0 0 0 2px rgba(232,160,74,0.45), 0 0 16px rgba(232,160,74,0.20) !important;
@@ -5868,7 +5868,7 @@ textarea { font-family: inherit; font-size: inherit; }
   to   { opacity: 1; transform: translateX(0) translateY(0); }
 }
 
-/* Explain-sourced AI bubble — accent left border */
+/* Explain-sourced AI bubble ï¿½ accent left border */
 .msg-bubble--explain {
   border-left: 3px solid rgba(232,160,74,0.55);
   background: rgba(232,160,74,0.03);
@@ -6089,7 +6089,7 @@ textarea { font-family: inherit; font-size: inherit; }
    7. NOTES PANEL REFINEMENT
    ------------------------------------------------------------------------------ */
 
-/* Active note — stronger visual */
+/* Active note ï¿½ stronger visual */
 .note-item.active {
   background: rgba(232,160,74,0.06);
   border-left: 3px solid var(--accent);
@@ -6112,7 +6112,7 @@ textarea { font-family: inherit; font-size: inherit; }
   opacity: 0.7;
 }
 
-/* Hover expand quote — remove line clamp on hover */
+/* Hover expand quote ï¿½ remove line clamp on hover */
 .note-item:hover .note-item-quote {
   display: block;
   -webkit-line-clamp: unset;
@@ -6120,7 +6120,7 @@ textarea { font-family: inherit; font-size: inherit; }
 }
 
 /* ------------------------------------------------------------------------------
-   8. CHAT INPUT — ChatGPT-style
+   8. CHAT INPUT ï¿½ ChatGPT-style
    ------------------------------------------------------------------------------ */
 
 .chat-input {
@@ -6185,7 +6185,7 @@ textarea { font-family: inherit; font-size: inherit; }
 }
 
 /* ------------------------------------------------------------------------------
-   10. PERFORMANCE FEEL — skeleton & smooth entrance
+   10. PERFORMANCE FEEL ï¿½ skeleton & smooth entrance
    ------------------------------------------------------------------------------ */
 
 /* Generic skeleton loader */
@@ -6227,7 +6227,7 @@ textarea { font-family: inherit; font-size: inherit; }
 }
 
 /* ------------------------------------------------------------------------------
-   LIGHT THEME — new rule overrides
+   LIGHT THEME ï¿½ new rule overrides
    ------------------------------------------------------------------------------ */
 
 [data-theme=light] .pdf-explaining-indicator {
@@ -6276,4 +6276,666 @@ textarea { font-family: inherit; font-size: inherit; }
 
 [data-theme=light] .pdf-scroll-area {
   background: #e8e6e0;
+}
+/* =============================================================================
+   ARXIVMIND â€” HOMEPAGE UPGRADE
+   Append this entire block to the bottom of index.css.
+   All rules use the existing design-token variables (--bg, --accent, etc.)
+   No existing rules are modified.
+
+   Sections:
+     1. ROOT & BLOBS
+     2. HERO
+     3. DEMO VIDEO
+     4. FEATURES
+     5. QUICK ACTIONS
+     6. SHARED UTILITIES
+     7. LIGHT THEME OVERRIDES
+     8. RESPONSIVE
+   ============================================================================= */
+
+
+/* -----------------------------------------------------------------------------
+   0. SCROLL FIX â€” Home screen scroll chain
+   The existing .workspace has overflow:hidden + height:100vh which traps
+   content. When .workspace contains .hs-root (home screen only) we need
+   the container to scroll instead of clip.
+   ----------------------------------------------------------------------------- */
+
+/* .workspace that directly wraps the home EmptyState */
+.workspace:has(.hs-root) {
+  overflow-y: auto;
+  overflow-x: hidden;
+  height: 100vh;         /* keep the outer bound */
+  display: block;        /* single child, no flex needed */
+}
+
+/* Fallback for browsers without :has() support â€” add this class manually
+   to .workspace in App.jsx if needed: className={hasPaper ? "workspace" : "workspace workspace--home"} */
+.workspace--home {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  height: 100vh !important;
+  display: block !important;
+}
+
+
+/* -----------------------------------------------------------------------------
+   1. ROOT & AMBIENT BLOBS
+   ----------------------------------------------------------------------------- */
+
+.hs-root {
+  position: relative;
+  min-height: auto;       /* don't try to fill a clipped parent */
+  padding: 52px 60px 72px;
+  display: flex;
+  flex-direction: column;
+  gap: 64px;
+  max-width: 1100px;
+  margin: 0 auto;
+  overflow-x: hidden;
+}
+
+/* Third blob â€” sits mid-right */
+.hs-blob--3 {
+  width: 320px;
+  height: 320px;
+  background: #4caf7d;
+  top: 50%;
+  right: -120px;
+  border-radius: 50%;
+  pointer-events: none;
+  filter: blur(90px);
+  opacity: 0.025;
+  animation: hs-blob-drift 16s ease-in-out infinite alternate;
+  animation-delay: -8s;
+  position: absolute;
+}
+
+[data-theme="light"] .hs-blob--3 { opacity: 0.03; }
+
+
+/* -----------------------------------------------------------------------------
+   2. HERO
+   ----------------------------------------------------------------------------- */
+
+.hs-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  animation: hs-fade-up 500ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Eyebrow pill */
+.hs-hero-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: var(--accent);
+  font-weight: 500;
+  text-transform: uppercase;
+  background: rgba(232, 160, 74, 0.07);
+  border: 1px solid rgba(232, 160, 74, 0.2);
+  padding: 5px 14px 5px 10px;
+  border-radius: 20px;
+  width: fit-content;
+}
+
+.hs-eyebrow-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+  animation: hs-dot-pulse 2.4s ease infinite;
+}
+
+@keyframes hs-dot-pulse {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50%       { opacity: 1; transform: scale(1.35); box-shadow: 0 0 8px var(--accent); }
+}
+
+/* Headline */
+.hs-hero-headline {
+  font-family: var(--font-serif);
+  font-size: clamp(32px, 4.2vw, 52px);
+  font-weight: 300;
+  line-height: 1.14;
+  color: var(--text);
+  letter-spacing: -0.8px;
+}
+
+.hs-hero-headline em {
+  font-style: italic;
+  font-weight: 300;
+  background: linear-gradient(115deg, var(--accent) 20%, #f5c07a 70%, var(--accent) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Sub-headline */
+.hs-hero-sub {
+  font-size: 13.5px;
+  color: var(--text-2);
+  max-width: 580px;
+  line-height: 1.8;
+}
+
+/* Stats row */
+.hs-hero-stats {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin-top: 6px;
+  padding: 18px 24px;
+  background: var(--subtle-bg);
+  border: 1px solid var(--subtle-border);
+  border-radius: var(--radius-lg);
+  width: fit-content;
+  animation: hs-fade-up 500ms 100ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.hs-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  animation: hs-fade-up 400ms calc(var(--stat-delay, 0) + 180ms) ease both;
+}
+
+.hs-stat-num {
+  font-family: var(--font-serif);
+  font-size: 22px;
+  font-weight: 300;
+  color: var(--accent);
+  line-height: 1;
+  letter-spacing: -0.5px;
+}
+
+.hs-stat-label {
+  font-size: 10px;
+  color: var(--text-3);
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.hs-stat-divider {
+  width: 1px;
+  height: 32px;
+  background: var(--border);
+  flex-shrink: 0;
+  border-radius: 1px;
+}
+
+
+/* -----------------------------------------------------------------------------
+   3. DEMO VIDEO
+   ----------------------------------------------------------------------------- */
+
+.hs-video-section {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  animation: hs-fade-up 520ms 80ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Shared section eyebrow label */
+.hs-section-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: var(--text-3);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.hs-section-line {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+  border-radius: 1px;
+}
+
+/* Video wrapper */
+.hs-video-wrap {
+  position: relative;
+  border-radius: 18px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.18),
+    0 8px 32px rgba(0, 0, 0, 0.22),
+    0 0 0 1px rgba(255, 255, 255, 0.04);
+  transition:
+    transform 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 280ms ease;
+  cursor: pointer;
+}
+
+.hs-video-wrap--hovered {
+  transform: scale(1.008) translateY(-2px);
+  border-color: rgba(232, 160, 74, 0.28);
+  box-shadow:
+    0 4px 16px rgba(0, 0, 0, 0.22),
+    0 16px 48px rgba(0, 0, 0, 0.26),
+    0 0 0 1px rgba(232, 160, 74, 0.12),
+    0 0 40px rgba(232, 160, 74, 0.06);
+}
+
+/* Top bar inside video wrap (badge) */
+.hs-video-top-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  background: linear-gradient(180deg, rgba(0,0,0,0.55) 0%, transparent 100%);
+  pointer-events: none;
+}
+
+.hs-video-badge {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10px;
+  letter-spacing: 1.4px;
+  color: rgba(255, 255, 255, 0.88);
+  font-weight: 500;
+  text-transform: uppercase;
+  background: rgba(0, 0, 0, 0.38);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  padding: 4px 12px 4px 9px;
+  border-radius: 20px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.hs-video-badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: hs-dot-pulse 2.2s ease infinite;
+  flex-shrink: 0;
+}
+
+.hs-video-duration {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.55);
+  letter-spacing: 0.8px;
+}
+
+/* The <video> element itself */
+.hs-video {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 520px;
+  object-fit: cover;
+  border-radius: 0;
+  background: var(--surface-2);
+}
+
+/* Bottom gradient â€” text readability overlay */
+.hs-video-gradient {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 80px;
+  background: linear-gradient(0deg, rgba(0,0,0,0.36) 0%, transparent 100%);
+  pointer-events: none;
+  border-radius: 0 0 17px 17px;
+}
+
+/* Glow ring â€” appears on hover */
+.hs-video-glow-ring {
+  position: absolute;
+  inset: -1px;
+  border-radius: 18px;
+  opacity: 0;
+  transition: opacity 300ms ease;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px rgba(232, 160, 74, 0.35);
+  pointer-events: none;
+}
+
+.hs-video-wrap--hovered .hs-video-glow-ring {
+  opacity: 1;
+}
+
+/* Caption below video */
+.hs-video-caption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  text-align: center;
+  justify-content: center;
+  font-style: italic;
+  letter-spacing: 0.1px;
+}
+
+.hs-caption-icon {
+  color: var(--accent);
+  font-style: normal;
+  font-size: 10px;
+}
+
+/* Blinking cursor (typing animation helper) */
+.hs-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 13px;
+  background: var(--accent);
+  margin-left: 2px;
+  vertical-align: middle;
+  animation: hs-blink 1s step-end infinite;
+  border-radius: 1px;
+}
+
+@keyframes hs-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+
+/* -----------------------------------------------------------------------------
+   4. FEATURES
+   ----------------------------------------------------------------------------- */
+
+.hs-features-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  animation: hs-fade-up 520ms 140ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Override existing .hs-features for 2Ã—2 grid with 4 cards */
+.hs-features {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  animation: none; /* controlled by parent */
+}
+
+/* Glass card base */
+.hs-feat-card {
+  position: relative;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 24px 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  cursor: default;
+  transition:
+    border-color   220ms cubic-bezier(0.22, 1, 0.36, 1),
+    background     220ms ease,
+    transform      220ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow     220ms cubic-bezier(0.22, 1, 0.36, 1);
+  animation: hs-card-in 380ms calc(var(--feat-i, 0) * 70ms + 220ms) cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.hs-feat-card:hover {
+  border-color: var(--feat-accent, var(--accent));
+  background: var(--surface-2);
+  transform: translateY(-3px);
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.18),
+    0 0 0 1px var(--feat-accent, var(--accent)),
+    0 0 20px color-mix(in srgb, var(--feat-accent, var(--accent)) 10%, transparent);
+}
+
+/* Animated top accent bar */
+.hs-feat-accent-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--feat-accent, var(--accent));
+  opacity: 0;
+  transform: scaleX(0.4);
+  transform-origin: left;
+  transition:
+    opacity  220ms ease,
+    transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
+  border-radius: 0 0 2px 2px;
+}
+
+.hs-feat-card:hover .hs-feat-accent-bar {
+  opacity: 1;
+  transform: scaleX(1);
+}
+
+/* Remove legacy ::before rule from existing CSS by overriding */
+.hs-feat-card::before {
+  display: none;
+}
+
+/* Inner glow that sweeps in on hover */
+.hs-feat-glow {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-lg);
+  background: radial-gradient(
+    ellipse at 50% 0%,
+    color-mix(in srgb, var(--feat-accent, var(--accent)) 8%, transparent) 0%,
+    transparent 65%
+  );
+  opacity: 0;
+  transition: opacity 280ms ease;
+  pointer-events: none;
+}
+
+.hs-feat-card:hover .hs-feat-glow {
+  opacity: 1;
+}
+
+/* Top row: icon + tag */
+.hs-feat-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.hs-feat-icon {
+  font-size: 20px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.hs-feat-tag {
+  font-size: 9px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 20px;
+  color: var(--tag-color, var(--accent));
+  background: color-mix(in srgb, var(--tag-color, var(--accent)) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tag-color, var(--accent)) 25%, transparent);
+  flex-shrink: 0;
+}
+
+.hs-feat-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  line-height: 1.3;
+}
+
+.hs-feat-desc {
+  font-size: 11.5px;
+  color: var(--text-2);
+  line-height: 1.7;
+  flex: 1;
+}
+
+
+/* -----------------------------------------------------------------------------
+   5. QUICK ACTIONS
+   ----------------------------------------------------------------------------- */
+
+.hs-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation: hs-fade-up 520ms 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.hs-actions-label {
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: var(--text-3);
+  font-weight: 500;
+}
+
+.hs-action-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.hs-action-chip {
+  font-size: 12px;
+  color: var(--text-2);
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: default;
+  transition:
+    color         180ms ease,
+    border-color  180ms ease,
+    background    180ms ease,
+    transform     180ms ease;
+  animation: hs-chip-in 340ms calc(var(--chip-i, 0) * 45ms + 360ms) ease both;
+}
+
+.hs-action-chip:hover {
+  color: var(--text);
+  border-color: rgba(232, 160, 74, 0.5);
+  background: rgba(232, 160, 74, 0.04);
+  transform: translateY(-1px);
+}
+
+
+/* -----------------------------------------------------------------------------
+   6. SHARED KEYFRAMES (safe to re-declare)
+   ----------------------------------------------------------------------------- */
+
+@keyframes hs-fade-up {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes hs-card-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes hs-chip-in {
+  from { opacity: 0; transform: translateX(-8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes hs-blob-drift {
+  from { transform: translate(0, 0) scale(1); }
+  to   { transform: translate(30px, 20px) scale(1.08); }
+}
+
+
+/* -----------------------------------------------------------------------------
+   7. LIGHT THEME OVERRIDES
+   ----------------------------------------------------------------------------- */
+
+[data-theme="light"] .hs-video-wrap {
+  border-color: var(--border);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.07),
+    0 8px 32px rgba(0, 0, 0, 0.09);
+}
+
+[data-theme="light"] .hs-video-wrap--hovered {
+  border-color: rgba(181, 114, 26, 0.35);
+  box-shadow:
+    0 4px 16px rgba(0, 0, 0, 0.1),
+    0 16px 48px rgba(0, 0, 0, 0.12),
+    0 0 24px rgba(181, 114, 26, 0.08);
+}
+
+[data-theme="light"] .hs-video-top-bar {
+  background: linear-gradient(180deg, rgba(0,0,0,0.3) 0%, transparent 100%);
+}
+
+[data-theme="light"] .hs-hero-eyebrow {
+  background: rgba(181, 114, 26, 0.06);
+  border-color: rgba(181, 114, 26, 0.18);
+}
+
+[data-theme="light"] .hs-hero-stats {
+  background: rgba(0, 0, 0, 0.02);
+  border-color: var(--border);
+}
+
+[data-theme="light"] .hs-feat-card:hover {
+  box-shadow:
+    0 6px 20px rgba(0, 0, 0, 0.08),
+    0 0 0 1px var(--feat-accent, var(--accent));
+}
+
+[data-theme="light"] .hs-feat-tag {
+  background: color-mix(in srgb, var(--tag-color, var(--accent)) 10%, transparent);
+}
+
+[data-theme="light"] .hs-blob--1 { opacity: 0.06; }
+[data-theme="light"] .hs-blob--2 { opacity: 0.04; }
+[data-theme="light"] .hs-blob--3 { opacity: 0.03; }
+
+
+/* -----------------------------------------------------------------------------
+   8. RESPONSIVE
+   ----------------------------------------------------------------------------- */
+
+@media (max-width: 1100px) {
+  .hs-root { padding: 40px 36px 56px; }
+  .hs-features { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 900px) {
+  .hs-root { padding: 36px 28px 48px; gap: 48px; }
+  .hs-features { grid-template-columns: repeat(2, 1fr); }
+  .hs-hero-stats { flex-wrap: wrap; gap: 16px; }
+  .hs-stat-divider { display: none; }
+}
+
+@media (max-width: 640px) {
+  .hs-root { padding: 28px 20px 40px; gap: 40px; }
+  .hs-features { grid-template-columns: 1fr; }
+  .hs-hero-headline { font-size: 28px; }
+  .hs-hero-stats { padding: 14px 16px; gap: 14px; }
+  .hs-video-wrap { border-radius: 12px; }
+  .hs-video-gradient { border-radius: 0 0 11px 11px; }
+  .hs-video-glow-ring { border-radius: 12px; }
+}
+
+@media (max-width: 420px) {
+  .hs-action-chips { flex-direction: column; }
+  .hs-hero-stats { width: 100%; }
 }
