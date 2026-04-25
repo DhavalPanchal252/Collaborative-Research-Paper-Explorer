@@ -19,7 +19,7 @@ const MODE_CONFIG = {
   simple:   { icon: "◎",  label: "Simple",   desc: "Plain English, no jargon"      },
 };
 
-async function fetchExplanation(figure, mode, signal) {
+async function fetchExplanation(figure, mode, signal, forceRegenerate = false) {
   const res = await fetch("/api/v1/figure/explain", {
     method:  "POST",
     headers: { "Content-Type": "application/json" },
@@ -32,6 +32,7 @@ async function fetchExplanation(figure, mode, signal) {
       type:        figure.type          ?? "unknown",
       page:        figure.page          ?? null,
       mode,
+      regenerate:  forceRegenerate,
     }),
   });
   if (!res.ok) {
@@ -48,6 +49,7 @@ export default function FigureExplainPanel({ figure, onBack, onGoToPDF }) {
   const [data,    setData]    = useState(null);
   const [error,   setError]   = useState(null);
   const [fetchId, setFetchId] = useState(0);
+  const [isRegenerating, setIsRegenerating] = useState(false);
   const abortRef              = useRef(null);
 
   const load = useCallback(async () => {
@@ -56,12 +58,18 @@ export default function FigureExplainPanel({ figure, onBack, onGoToPDF }) {
     abortRef.current = ctrl;
     setPhase("loading"); setData(null); setError(null);
     try {
-      const result = await fetchExplanation(figure, mode, ctrl.signal);
-      if (!ctrl.signal.aborted) { setData(result); setPhase("success"); }
+      const forceRegenerate = isRegenerating;
+      const result = await fetchExplanation(figure, mode, ctrl.signal, forceRegenerate);
+      if (!ctrl.signal.aborted) { setData(result); setPhase("success"); setIsRegenerating(false); }
     } catch (e) {
-      if (!ctrl.signal.aborted) { setError(e.message || "Explanation failed"); setPhase("error"); }
+      if (!ctrl.signal.aborted) { setError(e.message || "Explanation failed"); setPhase("error"); setIsRegenerating(false); }
     }
-  }, [figure, mode, fetchId]); // eslint-disable-line
+  }, [figure, mode, fetchId, isRegenerating]); // eslint-disable-line
+
+  const handleRegenerate = () => {
+    setIsRegenerating(true);
+    setFetchId(n => n + 1);
+  };
 
   useEffect(() => { load(); return () => abortRef.current?.abort(); }, [load]);
 
@@ -114,7 +122,7 @@ export default function FigureExplainPanel({ figure, onBack, onGoToPDF }) {
       {/* ═══ SCROLLABLE BODY ═══════════════════════════════════════ */}
       <div className="fep-body">
         {phase === "loading" && <PanelSkeleton mode={mode} />}
-        {phase === "error"   && <PanelError error={error} onRetry={() => setFetchId(n => n + 1)} />}
+        {phase === "error"   && <PanelError error={error} onRetry={handleRegenerate} />}
         {phase === "success" && data && <PanelResult data={data} />}
       </div>
 
@@ -123,7 +131,7 @@ export default function FigureExplainPanel({ figure, onBack, onGoToPDF }) {
         {phase === "success" && (
           <button
             className="fep-footer-btn fep-footer-btn--regen"
-            onClick={() => setFetchId(n => n + 1)}
+            onClick={handleRegenerate}
           >
             <span>↺</span> Regenerate
           </button>

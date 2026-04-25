@@ -854,7 +854,7 @@ class FigureExplainService:
         cache_key = (req.figure_id, req.mode)
 
         # ── 1. Cache hit ──────────────────────────────────────────────────────
-        if cache_key in self._cache:
+        if not req.regenerate and cache_key in self._cache:
             self._cache_hits += 1
             self._cache.move_to_end(cache_key)
             cached = self._cache[cache_key]

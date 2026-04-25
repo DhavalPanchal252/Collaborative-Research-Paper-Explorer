@@ -87,6 +87,7 @@ class FigureExplainRequest(BaseModel):
     type:        FigureType         = Field(default=FigureType.UNKNOWN, description="Figure type")
     page:        int | None         = Field(default=None, ge=1,  description="Source PDF page")
     mode:        ExplainMode        = Field(default=ExplainMode.DETAILED, description="Explanation depth")
+    regenerate:  bool               = Field(default=False, description="Bypass cache and force a new explanation")
 
     # ── Validators ────────────────────────────────────────────────────────────
 

@@ -267,11 +267,15 @@ export default function FigureModal({
                   onMouseEnter={() => setImgHovered(true)}
               />
             )}
-            {zoomed && (
+            {zoomed ? (
               <div className="zoom-hint">
                 Scroll to zoom • Drag to move • Double click to reset • ESC to exit
               </div>
-            )}
+            ) : imgHovered ? (
+              <div className="zoom-hint">
+                Click on image for zoom or drag feature
+              </div>
+            ) : null}
             {onPrev && (
               <button
                 className="fig-modal-nav fig-modal-nav--prev fig-modal-nav--enhanced"
@@ -386,35 +390,6 @@ export default function FigureModal({
                     </div>
                   </div>
                 )}
-              </div>
-
-              {/* ══════════════════════════════════════════════════════════
-                  ⚡ UX BEHAVIOR HINT TABLE
-                  Educates users about zoom/pan gestures on the image.
-                  Phase 7.5.3
-              ══════════════════════════════════════════════════════════ */}
-              <div className="fig-modal-section fig-modal-ux-section">
-                <div className="fig-modal-ux-header">
-                  <span className="fig-modal-ux-icon">⚡</span>
-                  <span className="fig-modal-ux-title">UX behavior</span>
-                  <span className="fig-modal-ux-subtitle">clean &amp; intuitive</span>
-                </div>
-                <table className="fig-modal-ux-table" aria-label="Image interaction gestures">
-                  <thead>
-                    <tr>
-                      <th>Action</th>
-                      <th>Result</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {UX_BEHAVIORS.map(({ action, result }) => (
-                      <tr key={action}>
-                        <td>{action}</td>
-                        <td>{result}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
               </div>
 
             </div>

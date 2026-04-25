@@ -4,6 +4,7 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import UploadPanel    from "./components/UploadPanel";
+import EmptyState from "./components/EmptyState"; // home page
 import ChatPanel      from "./components/ChatPanel";
 import PDFViewer      from "./components/PDFViewer";
 import ModelSelector  from "./components/ModelSelector";
@@ -240,7 +241,8 @@ export default function App() {
     );
   }
 
-  /* ─── HOME SCREEN ────────────────────────────────────────────────────────── */
+  // ── What the HOME SCREEN return block looks like (unchanged except import source):
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -269,21 +271,6 @@ export default function App() {
         </div>
       </aside>
       <div className="workspace"><EmptyState /></div>
-    </div>
-  );
-}
-
-function EmptyState() {
-  return (
-    <div className="empty-state">
-      <div className="empty-glyph">◈</div>
-      <h2>Upload a research paper to begin</h2>
-      <p>Ask questions, extract insights, and explore ideas — all powered by your chosen LLM.</p>
-      <ul className="empty-hints">
-        <li>→ Summarise the methodology</li>
-        <li>→ Explain the key findings</li>
-        <li>→ Highlight any passage to explain it instantly</li>
-      </ul>
     </div>
   );
 }

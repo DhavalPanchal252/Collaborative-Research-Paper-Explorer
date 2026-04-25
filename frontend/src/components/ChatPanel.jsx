@@ -84,9 +84,9 @@ export default function ChatPanel({
             {paperName.length > 40 ? paperName.slice(0, 37) + "..." : paperName}
           </span>
         </div>
-        <span className={`chat-model-pill chat-model-pill--${model}`}>
+        {/* <span className={`chat-model-pill chat-model-pill--${model}`}>
           {model === "groq" ? "⚡ Groq" : "🖥 Ollama"}
-        </span>
+        </span> */}
       </div>
 
       {/* Messages */}
