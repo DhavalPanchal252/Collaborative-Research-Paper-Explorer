@@ -1,6 +1,4 @@
 // src/App.jsx
-// Phase 7.1: Figure Explorer mode added via top-level `viewMode` state.
-// All existing PDF/Chat logic is untouched.
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import UploadPanel    from "./components/UploadPanel";
@@ -16,6 +14,9 @@ import FigureExplorer from "./components/FigureExplorer";
 import { uploadPDF }  from "./api/upload";
 import { explainSelection } from "./api/explain";
 
+// 🔥 NEW
+import ForceGraph2D from "react-force-graph-2d";
+
 export default function App() {
   const [uploadedFile, setUploadedFile]       = useState(null);
   const [uploadMeta, setUploadMeta]           = useState(null);
@@ -26,12 +27,13 @@ export default function App() {
   const [injectMessage, setInjectMessage]     = useState(null);
   const [explainResult, setExplainResult]     = useState(null);
 
-  // ── Phase 7.1: View mode ──────────────────────────────────────────────────
-  // "pdf" | "figures" | "citation" | "export"
   const [viewMode, setViewMode] = useState("pdf");
-  const [targetPage, setTargetPage] = useState(null);
 
-  // ── Phase X: Theme system ─────────────────────────────────────────────────
+  // 🔥 NEW STATES
+  const [sessionId, setSessionId] = useState(null);
+  const [graphData, setGraphData] = useState(null);
+  const [graphLoading, setGraphLoading] = useState(false);
+
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem("arxivmind_theme");
     const resolved = (saved === "dark" || saved === "light")
@@ -51,16 +53,25 @@ export default function App() {
   const [focusedHighlightId, setFocusedHighlightId] = useState(null);
   const pendingHighlightIdRef = useRef(null);
 
-  // ── Upload ────────────────────────────────────────────────────────────────
+  // ── Upload ─────────────────────────────────────────
 
   async function handleUpload(file) {
     setUploading(true);
     setUploadError(null);
     try {
       localStorage.removeItem("session_id");
+
       const meta = await uploadPDF(file);
+
       setUploadedFile(file);
       setUploadMeta(meta);
+
+      // 🔥 SAVE SESSION ID
+      setSessionId(meta.session_id);
+
+      // reset graph when new paper uploaded
+      setGraphData(null);
+
     } catch (err) {
       setUploadError(err.message || "Upload failed. Please try again.");
     } finally {
@@ -79,10 +90,43 @@ export default function App() {
     setHighlights([]);
     setDeleteHighlightId(null);
     setViewMode("pdf");
+
+    // 🔥 reset graph
+    setGraphData(null);
+    setSessionId(null);
+
     pendingHighlightIdRef.current = null;
   }
 
-  // ── Explain flow ──────────────────────────────────────────────────────────
+  // ── GRAPH FETCH ───────────────────────────────────
+
+  const fetchGraph = async () => {
+    if (!sessionId) return;
+
+    setGraphLoading(true);
+
+    try {
+      const res = await fetch(
+        `http://127.0.0.1:8000/api/v1/citation-graph?session_id=${sessionId}`
+      );
+
+      const data = await res.json();
+      setGraphData(data);
+    } catch (err) {
+      console.error("Graph fetch failed", err);
+    }
+
+    setGraphLoading(false);
+  };
+
+  // 🔥 TRIGGER ON TAB CHANGE
+  useEffect(() => {
+    if (viewMode === "citation" && !graphData) {
+      fetchGraph();
+    }
+  }, [viewMode]);
+
+  // ── Explain flow ─────────────────────────────────
 
   const handleExplainRequest = useCallback(
     async (selectedText, highlightId = null) => {
@@ -102,18 +146,18 @@ export default function App() {
         );
 
         setInjectMessage({
-          question:    userQuestion,
-          answer:      answer?.trim() ? answer : "⚠ Model returned empty response. Try again.",
+          question: userQuestion,
+          answer: answer?.trim() ? answer : "⚠ Empty response.",
           highlightId: pendingHighlightIdRef.current,
         });
 
         setExplainResult({ text: selectedText, answer, source_chunks, confidence });
 
       } catch (err) {
-        const errorMsg = `⚠ Could not explain: ${err.message || "Unknown error"}`;
+        const errorMsg = `⚠ Error: ${err.message}`;
         setInjectMessage({
-          question:    userQuestion,
-          answer:      errorMsg,
+          question: userQuestion,
+          answer: errorMsg,
           highlightId: pendingHighlightIdRef.current,
         });
         setExplainResult({ text: selectedText, answer: errorMsg });
@@ -174,8 +218,6 @@ export default function App() {
 
         {/* UPDATED: data-view lets CSS hide sidebar in figures mode */}
         <div className="app-paper-body" data-view={viewMode}>
-
-          {/* Sidebar — hidden via CSS when viewMode === "figures" */}
           <aside className="sidebar">
             <div className="sidebar-section">
               <p className="section-label">PAPER</p>
@@ -189,8 +231,8 @@ export default function App() {
               <p className="section-label">NOTES</p>
               <NotesPanel
                 highlights={highlights}
-                onSelectHighlight={handleSelectHighlight}
-                onDeleteHighlight={handleDeleteHighlightFromNotes}
+                onSelectHighlight={(h) => setFocusedHighlightId(h.id)}
+                onDeleteHighlight={(id) => setDeleteHighlightId(id)}
                 activeId={focusedHighlightId}
               />
             </div>
@@ -200,13 +242,53 @@ export default function App() {
             </div>
           </aside>
 
-          {/* ── Center panel: mode-switched ── */}
+          {/* ── CENTER PANEL ── */}
           {viewMode === "figures" ? (
-            // UPDATED: full-bleed — no paper-pdf wrapper needed
-            <FigureExplorer
+            <FigureExplorer 
               onExplain={handleFigureExplain}
               onGoToPDF={handleFigureGoToPDF}
             />
+          ) : viewMode === "citation" ? (
+            <div style={{ width: "100%", height: "100%" }}>
+              {graphLoading && <p style={{ padding: 20 }}>Loading citation graph...</p>}
+
+              {!graphLoading && graphData && (
+                <ForceGraph2D
+                  graphData={graphData}
+
+                  backgroundColor="#ffffff"
+
+                  linkColor={() => "rgba(0,0,0,0.1)"}
+                  linkWidth={0.5}
+
+                  linkDistance={(link) => {
+                    return 200 / Math.sqrt(link.weight || 1);
+                  }}
+
+                  nodeCanvasObject={(node, ctx, globalScale) => {
+                    const size = node.size || 6;
+
+                    ctx.beginPath();
+                    ctx.arc(node.x, node.y, size, 0, 2 * Math.PI);
+                    ctx.fillStyle = "#5f8f8f";
+                    ctx.fill();
+
+                    const label = node.label?.slice(0, 15) || "";
+                    ctx.font = `${10 / globalScale}px Sans-Serif`;
+                    ctx.fillStyle = "#333";
+                    ctx.fillText(label, node.x + size + 2, node.y);
+                  }}
+
+                  cooldownTicks={200}
+                  d3AlphaDecay={0.01}
+                  d3VelocityDecay={0.4}
+
+                  onNodeClick={(node) => {
+                    if (node.url) window.open(node.url, "_blank");
+                  }}
+                />
+              )}
+            </div>
           ) : (
             <>
               <div className="paper-pdf">
