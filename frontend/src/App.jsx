@@ -294,15 +294,6 @@ export default function App() {
               <span className="status-text">{uploadMeta?.chunks_created ?? "—"} chunks indexed</span>
             </div>
           </aside>
-
-          {/* REST UNCHANGED */}
-          <div className="paper-pdf">
-            <PDFViewer file={uploadedFile} onExplainRequest={handleExplainRequest} />
-          </div>
-
-          <div className="paper-chat">
-            <ChatPanel model={model} paperName={uploadedFile?.name} />
-          </div>
           {/* ── CENTER PANEL ── */}
           {viewMode === "figures" ? (
             <FigureExplorer 
