@@ -16,6 +16,7 @@
 // • onGoToPDF prop is preserved for the in-viewer sibling navigation
 //   (FigureExplainPanel still calls it to scroll the embedded PDF viewer).
 //   The new button does NOT call onGoToPDF — it opens a new browser tab.
+// Phase 7.5.3 — Added ⚡ UX behavior hint table in detail pane.
 
 import { useEffect, useState, useCallback } from "react";
 import FigureExplainPanel from "./FigureExplainPanel";
@@ -35,48 +36,68 @@ const IMPORTANCE_CONFIG = {
   low:    { label: "Low",           cls: "fig-importance-badge--low"    },
 };
 
+const UX_BEHAVIORS = [
+  { action: "Click image",  result: "Enter zoom mode" },
+  { action: "Scroll",       result: "Zoom"            },
+  { action: "Drag",         result: "Move image"      },
+  { action: "Double click", result: "Reset"           },
+  { action: "ESC",          result: "Exit"            },
+];
+
 // ---------------------------------------------------------------------------
 // Hook — PDF navigation
 // ---------------------------------------------------------------------------
-/**
- * Builds the page-anchored PDF URL and returns a stable click handler.
- *
- * Rules:
- *  - Both `pdfUrl` AND a valid `page` (≥ 1) are required; otherwise disabled.
- *  - `page` values < 1 or non-numeric are treated as page 1 (safe fallback).
- *  - Absolute URLs (http/https) are used as-is; relative paths are prefixed
- *    with the Vite API base so this works across dev + staging + prod.
- *  - Opens in a new tab; noopener + noreferrer for security.
- *  - "progress" cursor flashes for 100 ms on click — gives tactile feedback
- *    without blocking the UI thread.
- *
- * @param {string|undefined} pdfUrl   Absolute URL for the session PDF.
- * @param {number|undefined} page     1-based page number from the figure.
- * @returns {{ href: string, disabled: boolean, handleClick: () => void }}
- */
 function usePdfNavigation(pdfUrl, page) {
   const [navigating, setNavigating] = useState(false);
 
-  // Normalise page: must be a positive integer; fall back to 1.
   const safePage = Number.isFinite(Number(page)) && Number(page) >= 1
     ? Math.floor(Number(page))
     : 1;
 
-  // Disabled when there is no URL to navigate to or page is completely invalid.
   const disabled = !pdfUrl || !Number.isFinite(Number(page));
 
-  // Full URL with fragment — prebuilt so <a href> can also use it.
   const href = disabled ? "#" : `${pdfUrl}#page=${safePage}`;
 
   const handleClick = useCallback(() => {
     if (disabled) return;
 
-    // Brief "progress" cursor — purely cosmetic, does not block anything.
     setNavigating(true);
     setTimeout(() => setNavigating(false), 100);
 
     window.open(href, "_blank", "noopener,noreferrer");
-  }, [disabled, href]);
+    }, [disabled, href]);
+
+    const handleZoom = (e) => {
+    if (!zoomed) return;
+
+    e.preventDefault();
+    const delta = e.deltaY * -0.001;
+
+    setScale((prev) => Math.min(Math.max(1, prev + delta), 4));
+  };
+
+  const handleMouseDown = (e) => {
+    if (!zoomed) return;
+    setDragging(true);
+    setStart({
+      x: e.clientX - position.x,
+      y: e.clientY - position.y,
+    });
+  };
+
+  const handleMouseMove = (e) => {
+    if (!dragging) return;
+
+    setPosition({
+      x: e.clientX - start.x,
+      y: e.clientY - start.y,
+    });
+  };
+
+  const resetZoom = () => {
+    setScale(1);
+    setPosition({ x: 0, y: 0 });
+  };
 
   return { href, disabled, navigating, handleClick, safePage };
 }
@@ -88,7 +109,7 @@ export default function FigureModal({
   figure,
   onClose,
   onExplain,
-  onGoToPDF,          // kept for FigureExplainPanel (in-viewer scroll)
+  onGoToPDF,
   onPrev,
   onNext,
   currentIndex,
@@ -99,8 +120,12 @@ export default function FigureModal({
   const [captionOpen, setCaptionOpen] = useState(false);
   const [imgHovered,  setImgHovered]  = useState(false);
   const [explainOpen, setExplainOpen] = useState(false);
+  const [start, setStart] = useState({ x: 0, y: 0 });
+  const [zoomed, setZoomed] = useState(false);
+  const [scale, setScale] = useState(1);
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
 
-  // Reset transient state when the figure changes.
   useEffect(() => {
     setImgLoaded(false);
     setImgError(false);
@@ -112,7 +137,16 @@ export default function FigureModal({
   useEffect(() => {
     function onKey(e) {
       if (e.key === "Escape") {
-        if (explainOpen) { setExplainOpen(false); return; }
+        if (zoomed) {
+          setZoomed(false);
+          setScale(1);
+          setPosition({ x: 0, y: 0 });
+          return;
+        }
+        if (explainOpen) {
+          setExplainOpen(false);
+          return;
+        }
         onClose?.();
       }
       if (!explainOpen) {
@@ -122,7 +156,7 @@ export default function FigureModal({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, onPrev, onNext, explainOpen]);
+  }, [onClose, onPrev, onNext, explainOpen, zoomed]);
 
   if (!figure) return null;
 
@@ -130,10 +164,9 @@ export default function FigureModal({
     id, image, clean_caption, caption,
     page, type = "other", title, description,
     importance = "medium", confidence = null,
-    pdf_url,    // ← Phase 7.5.2: stamped by figureService.normaliseFigure
+    pdf_url,
   } = figure;
 
-  // ── PDF navigation (hook) ─────────────────────────────────────────────────
   const {
     disabled:   pdfDisabled,
     navigating: pdfNavigating,
@@ -150,6 +183,29 @@ export default function FigureModal({
     setExplainOpen(true);
     onExplain?.(id);
   }, [id, onExplain]);
+
+  const handleZoom = (e) => {
+    if (!zoomed) return;
+    e.preventDefault();
+    const delta = e.deltaY * -0.001;
+    setScale((prev) => Math.min(Math.max(1, prev + delta), 4));
+  };
+
+  const handleMouseDown = (e) => {
+    if (!zoomed) return;
+    setDragging(true);
+    setStart({ x: e.clientX - position.x, y: e.clientY - position.y });
+  };
+
+  const handleMouseMove = (e) => {
+    if (!dragging) return;
+    setPosition({ x: e.clientX - start.x, y: e.clientY - start.y });
+  };
+
+  const resetZoom = () => {
+    setScale(1);
+    setPosition({ x: 0, y: 0 });
+  };
 
   return (
     <div
@@ -183,21 +239,38 @@ export default function FigureModal({
             )}
             {!imgError && (
               <img
-                key={id}
-                src={image}
-                alt={title}
-                className="fig-modal-img"
-                style={{
-                  opacity:    imgLoaded ? 1 : 0,
-                  transform:  imgHovered && !explainOpen ? "scale(1.05)" : "scale(1)",
-                  transition: "opacity 300ms ease, transform 320ms ease",
-                  cursor:     "zoom-in",
-                }}
-                onLoad={()  => setImgLoaded(true)}
-                onError={() => { setImgError(true); setImgLoaded(false); }}
-                onMouseEnter={() => setImgHovered(true)}
-                onMouseLeave={() => setImgHovered(false)}
+                  key={id}
+                  src={image}
+                  alt={title}
+                  className="fig-modal-img"
+                  style={{
+                    opacity: imgLoaded ? 1 : 0,
+                    transform: zoomed
+                      ? `translate(${position.x}px, ${position.y}px) scale(${scale})`
+                      : (imgHovered && !explainOpen ? "scale(1.05)" : "scale(1)"),
+                    transition: zoomed
+                      ? "none"
+                      : "opacity 300ms ease, transform 320ms ease",
+                    cursor: zoomed
+                      ? (dragging ? "grabbing" : "grab")
+                      : "zoom-in",
+                  }}
+                  onClick={() => { if (!zoomed) setZoomed(true); }}
+                  onWheel={handleZoom}
+                  onMouseDown={handleMouseDown}
+                  onMouseMove={handleMouseMove}
+                  onMouseUp={() => setDragging(false)}
+                  onMouseLeave={() => { setDragging(false); setImgHovered(false); }}
+                  onDoubleClick={resetZoom}
+                  onLoad={() => setImgLoaded(true)}
+                  onError={() => { setImgError(true); setImgLoaded(false); }}
+                  onMouseEnter={() => setImgHovered(true)}
               />
+            )}
+            {zoomed && (
+              <div className="zoom-hint">
+                Scroll to zoom • Drag to move • Double click to reset • ESC to exit
+              </div>
             )}
             {onPrev && (
               <button
@@ -225,22 +298,6 @@ export default function FigureModal({
         </div>
 
         {/* ══════════════════════ RIGHT — detail / explain ══════════════════ */}
-        {/*
-            Layout (flex column, height:100%):
-            ┌─────────────────────────────────┐
-            │  [close ×]  (absolute)          │
-            │─────────────────────────────────│
-            │                                 │
-            │  scroll area  (flex: 1)         │
-            │  title · badges · desc          │
-            │  caption · metadata             │
-            │                                 │
-            │─────────────────────────────────│
-            │  STICKY FOOTER  (flex-shrink:0) │
-            │  [✦ Explain with AI]            │
-            │  [↗ Go to PDF • p.N]            │
-            └─────────────────────────────────┘
-        */}
         <div className="fig-modal-right fig-modal-right--swappable">
 
           {/* ── DETAIL pane ─────────────────────────────────────────────── */}
@@ -331,16 +388,40 @@ export default function FigureModal({
                 )}
               </div>
 
+              {/* ══════════════════════════════════════════════════════════
+                  ⚡ UX BEHAVIOR HINT TABLE
+                  Educates users about zoom/pan gestures on the image.
+                  Phase 7.5.3
+              ══════════════════════════════════════════════════════════ */}
+              <div className="fig-modal-section fig-modal-ux-section">
+                <div className="fig-modal-ux-header">
+                  <span className="fig-modal-ux-icon">⚡</span>
+                  <span className="fig-modal-ux-title">UX behavior</span>
+                  <span className="fig-modal-ux-subtitle">clean &amp; intuitive</span>
+                </div>
+                <table className="fig-modal-ux-table" aria-label="Image interaction gestures">
+                  <thead>
+                    <tr>
+                      <th>Action</th>
+                      <th>Result</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {UX_BEHAVIORS.map(({ action, result }) => (
+                      <tr key={action}>
+                        <td>{action}</td>
+                        <td>{result}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
             </div>
             {/* ── END scroll area ── */}
 
-            {/* ═══ STICKY FOOTER — ALWAYS VISIBLE ═══════════════════════════
-                Lives OUTSIDE the scroll container so it is NEVER clipped.
-                flex-shrink:0 + border-top pins it to the bottom of the pane.
-            ════════════════════════════════════════════════════════════════ */}
+            {/* ═══ STICKY FOOTER ═══════════════════════════════════════════ */}
             <div className="fig-modal-detail-footer">
-
-              {/* ── Explain with AI ──────────────────────────────────────── */}
               <button
                 className="fig-modal-btn fig-modal-btn--explain fig-modal-btn--primary"
                 onClick={handleExplainClick}
@@ -348,14 +429,6 @@ export default function FigureModal({
                 ✦ Explain with AI
               </button>
 
-              {/* ── Go to PDF ────────────────────────────────────────────────
-                  Phase 7.5.2 changes:
-                  • Disabled when pdf_url or page is missing.
-                  • Label includes the page number: "↗ Go to PDF • p.4"
-                  • Opens in new tab via window.open (handled by hook).
-                  • data-navigating drives the "progress" cursor CSS tweak.
-                  • title provides an accessible tooltip.
-              ─────────────────────────────────────────────────────────────── */}
               <button
                 className="fig-modal-btn fig-modal-btn--goto fig-modal-btn--secondary"
                 onClick={handleGoToPDF}
@@ -377,7 +450,6 @@ export default function FigureModal({
                   ? "↗ Go to PDF"
                   : `↗ Go to PDF • p.${safePage}`}
               </button>
-
             </div>
 
           </div>
