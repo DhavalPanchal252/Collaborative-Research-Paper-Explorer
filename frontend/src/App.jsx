@@ -1,6 +1,7 @@
 // 🔥 EXISTING IMPORTS (unchanged)
 import { useState, useCallback, useRef, useEffect } from "react";
 import UploadPanel    from "./components/UploadPanel";
+import EmptyState from "./components/EmptyState"; // home page
 import ChatPanel      from "./components/ChatPanel";
 import PDFViewer      from "./components/PDFViewer";
 import ModelSelector  from "./components/ModelSelector";
@@ -39,6 +40,7 @@ export default function App() {
   const [explainResult, setExplainResult] = useState(null);
 
   const [viewMode, setViewMode] = useState("pdf");
+  const [targetPage, setTargetPage] = useState(null);
 
   // 🔥 GRAPH
   const [sessionId, setSessionId] = useState(null);
@@ -150,12 +152,44 @@ export default function App() {
     [model, explainLoading]
   );
 
+  const handleHighlightFocus = useCallback((id) => setFocusedHighlightId(id), []);
+
+  const handleHighlightsChange         = useCallback((hs) => setHighlights(hs), []);
+  const handleSelectHighlight          = useCallback((h)  => setFocusedHighlightId(h.id), []);
+  const handleDeleteHighlightFromNotes = useCallback((id) => setDeleteHighlightId(id), []);
+  const handleDeleteHighlightConsumed  = useCallback(() => setDeleteHighlightId(null), []);
+  const handleInjectConsumed           = useCallback(() => setInjectMessage(null), []);
+  const handleExplainResultConsumed    = useCallback(() => setExplainResult(null), []);
+  const handleFocusedHighlightConsumed = useCallback(() => setFocusedHighlightId(null), []);
+
+  // ── Figure Explorer hooks (pre-wired for Phase 7.2+) ─────────────────────
+  const handleFigureExplain = useCallback((figureId) => {
+    console.log("Explain figure", figureId);
+    // Phase 7.2: will inject into ChatPanel
+  }, []);
+
+  const handleFigureGoToPDF = useCallback((page) => {
+    console.log("Go to PDF page", page);
+    setTargetPage(page);
+    setViewMode("pdf");
+  }, []);
+
   const hasPaper = !!uploadedFile;
 
   // 🔐 AUTH GATE
   if (!session) {
     return <Auth onLogin={setSession} />;
   }
+  /* ─── PAPER LOADED ───────────────────────────────────────────────────────── */
+  // ─────────────────────────────────────────────────────────────────
+// App.jsx — ONLY THE CHANGED SECTION (replace the hasPaper return block)
+// TASK 1: Remove sidebar when viewMode === "figures"
+// ─────────────────────────────────────────────────────────────────
+//
+// CHANGE 1: Add data-view attribute to app-paper-body so CSS can hide sidebar.
+// CHANGE 2: FigureExplorer rendered without paper-pdf wrapper — full bleed.
+// Everything else is UNTOUCHED.
+// ─────────────────────────────────────────────────────────────────
 
   // 🔥 NEW: HANDLE PAPER SELECT
   function handleSelectPaper(paper) {
@@ -217,6 +251,7 @@ export default function App() {
           onTabChange={setViewMode}
         />
 
+        {/* UPDATED: data-view lets CSS hide sidebar in figures mode */}
         <div className="app-paper-body" data-view={viewMode}>
           <aside className="sidebar">
 
@@ -254,6 +289,10 @@ export default function App() {
                 activeId={focusedHighlightId}
               />
             </div>
+            <div className="sidebar-footer">
+              <span className="status-dot" data-ready="true" />
+              <span className="status-text">{uploadMeta?.chunks_created ?? "—"} chunks indexed</span>
+            </div>
           </aside>
 
           {/* REST UNCHANGED */}
@@ -264,6 +303,83 @@ export default function App() {
           <div className="paper-chat">
             <ChatPanel model={model} paperName={uploadedFile?.name} />
           </div>
+          {/* ── CENTER PANEL ── */}
+          {viewMode === "figures" ? (
+            <FigureExplorer 
+              onExplain={handleFigureExplain}
+              onGoToPDF={handleFigureGoToPDF}
+            />
+          ) : viewMode === "citation" ? (
+            <div style={{ width: "100%", height: "100%" }}>
+              {graphLoading && <p style={{ padding: 20 }}>Loading citation graph...</p>}
+
+              {!graphLoading && graphData && (
+                <ForceGraph2D
+                  graphData={graphData}
+
+                  backgroundColor="#ffffff"
+
+                  linkColor={() => "rgba(0,0,0,0.1)"}
+                  linkWidth={0.5}
+
+                  linkDistance={(link) => {
+                    return 200 / Math.sqrt(link.weight || 1);
+                  }}
+
+                  nodeCanvasObject={(node, ctx, globalScale) => {
+                    const size = node.size || 6;
+
+                    ctx.beginPath();
+                    ctx.arc(node.x, node.y, size, 0, 2 * Math.PI);
+                    ctx.fillStyle = "#5f8f8f";
+                    ctx.fill();
+
+                    const label = node.label?.slice(0, 15) || "";
+                    ctx.font = `${10 / globalScale}px Sans-Serif`;
+                    ctx.fillStyle = "#333";
+                    ctx.fillText(label, node.x + size + 2, node.y);
+                  }}
+
+                  cooldownTicks={200}
+                  d3AlphaDecay={0.01}
+                  d3VelocityDecay={0.4}
+
+                  onNodeClick={(node) => {
+                    if (node.url) window.open(node.url, "_blank");
+                  }}
+                />
+              )}
+            </div>
+          ) : (
+            <>
+              <div className="paper-pdf">
+                <PDFViewer
+                  file={uploadedFile}
+                  targetPage={targetPage}
+                  onTargetPageConsumed={() => setTargetPage(null)}
+                  onExplainRequest={handleExplainRequest}
+                  explainLoading={explainLoading}
+                  explainResult={explainResult}
+                  onExplainResultConsumed={handleExplainResultConsumed}
+                  focusedHighlightId={focusedHighlightId}
+                  onFocusedHighlightConsumed={handleFocusedHighlightConsumed}
+                  onHighlightsChange={handleHighlightsChange}
+                  deleteHighlightId={deleteHighlightId}
+                  onDeleteHighlightConsumed={handleDeleteHighlightConsumed}
+                />
+              </div>
+              <div className="paper-chat">
+                <ChatPanel
+                  model={model}
+                  paperName={uploadedFile.name}
+                  injectMessage={injectMessage}
+                  onInjectConsumed={handleInjectConsumed}
+                  onHighlightClick={handleHighlightFocus}
+                  explainLoading={explainLoading}
+                />
+              </div>
+            </>
+          )}
         </div>
       </div>
     );

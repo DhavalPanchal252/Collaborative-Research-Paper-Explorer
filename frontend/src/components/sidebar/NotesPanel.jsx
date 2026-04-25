@@ -151,7 +151,7 @@ function NoteItem({ highlight: h, onSelect, onDelete, active, query }) {
 
         {/* Timestamp */}
         {h.createdAt && (
-          <p className="note-item-time">{formatTime(h.createdAt)}</p>
+          <p className="note-item-time"><span className="note-time-icon">⏱</span> {formatTime(h.createdAt)}</p>
         )}
       </div>
 

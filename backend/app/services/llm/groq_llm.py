@@ -36,7 +36,7 @@ load_dotenv(dotenv_path=str(_env_path) if _env_path.exists() else None)
 
 _MODEL       = "llama-3.1-8b-instant"
 _TEMPERATURE = 0.4
-_MAX_TOKENS  = 1024
+_MAX_TOKENS  = 400
 
 # ---------------------------------------------------------------------------
 # Client factory

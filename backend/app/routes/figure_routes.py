@@ -12,15 +12,16 @@ Response shape (Phase 7.4.1):
 {
     "session_id":    "...",
     "total_figures": 12,
+    "pdf_url":       "/static/papers/<filename>.pdf",   # ← Phase 7.5.2 addition
     "figures": [
         {
             "id":            "Fig. 3",
-            "caption":       "Fig. 3.\\nIllustration of TUDA...",   # original
-            "clean_caption": "Illustration of TUDA architecture...", # cleaned
-            "title":         "Illustration Of Tuda Architecture",    # generated
-            "type":          "unknown",                              # Phase 7.4.2
-            "description":   "",                                     # Phase 7.4.2
-            "importance":    "unknown",                              # Phase 7.4.2
+            "caption":       "Fig. 3.\\nIllustration of TUDA...",
+            "clean_caption": "Illustration of TUDA architecture...",
+            "title":         "Illustration Of Tuda Architecture",
+            "type":          "unknown",
+            "description":   "",
+            "importance":    "unknown",
             "quality_score": 3,
             "confidence":    0.8901,
             "page":          4,
@@ -122,31 +123,7 @@ async def get_figures(session_id: str | None = None) -> JSONResponse:
     # ── 1. Resolve session ───────────────────────────────────────────────────
     session_id, session = _get_or_create_session(session_id)
 
-    # ── 2. Cache hit — return already-refined figures (with version check) ────
-    cached_figures_version = session.get("figures_version")
-    if "figures" in session and cached_figures_version == _FIGURES_VERSION:
-        start_cache_time = time.time()
-        # Cache hits: no timing metadata (already processed)
-        result = _build_response(session_id, session["figures"])
-        cache_time = time.time() - start_cache_time
-        logger.info(
-            f"[{request_id}] cache hit for session='{session_id}' (%d figures) | "
-            f"version={_FIGURES_VERSION} | time=%.4fs",
-            len(session["figures"]), cache_time,
-        )
-        return result
-    
-    # Cache miss or version mismatch — clear old cache
-    if "figures" in session and cached_figures_version != _FIGURES_VERSION:
-        logger.info(
-            f"[{request_id}] cache invalidated due to version mismatch | "
-            f"cached={cached_figures_version}, current={_FIGURES_VERSION}"
-        )
-        session.pop("figures", None)
-        session.pop("figures_version", None)
-
-
-    # ── 3. Validate PDF path ─────────────────────────────────────────────────
+    # ── 2. Validate PDF path (needed for pdf_url in all response paths) ───────
     pdf_path: str | None = session.get("pdf_path")
 
     if not pdf_path:
@@ -158,6 +135,34 @@ async def get_figures(session_id: str | None = None) -> JSONResponse:
             ),
         )
 
+    # Derive a browser-accessible URL from the stored filesystem path.
+    # pdf_path is stored as e.g. "static/papers/abc.pdf" (no leading slash).
+    # We normalise to "/static/papers/abc.pdf" for the frontend.
+    pdf_url = _path_to_url(pdf_path)
+
+    # ── 3. Cache hit — return already-refined figures (with version check) ────
+    cached_figures_version = session.get("figures_version")
+    if "figures" in session and cached_figures_version == _FIGURES_VERSION:
+        start_cache_time = time.time()
+        result = _build_response(session_id, session["figures"], pdf_url=pdf_url)
+        cache_time = time.time() - start_cache_time
+        logger.info(
+            f"[{request_id}] cache hit for session='{session_id}' (%d figures) | "
+            f"version={_FIGURES_VERSION} | time=%.4fs",
+            len(session["figures"]), cache_time,
+        )
+        return result
+
+    # Cache miss or version mismatch — clear old cache
+    if "figures" in session and cached_figures_version != _FIGURES_VERSION:
+        logger.info(
+            f"[{request_id}] cache invalidated due to version mismatch | "
+            f"cached={cached_figures_version}, current={_FIGURES_VERSION}"
+        )
+        session.pop("figures", None)
+        session.pop("figures_version", None)
+
+    # ── 4. Validate PDF exists on disk ──────────────────────────────────────
     if not Path(pdf_path).exists():
         logger.error(
             f"[{request_id}] PDF '{pdf_path}' missing on disk (session='{session_id}')."
@@ -167,12 +172,10 @@ async def get_figures(session_id: str | None = None) -> JSONResponse:
             detail="The PDF referenced by this session no longer exists on disk.",
         )
 
-    # ── 4. Extract raw figures (non-blocking with timeout protection) ──────────
+    # ── 5. Extract raw figures (non-blocking with timeout protection) ──────────
     try:
         start_time = time.time()
         logger.info(f"[{request_id}] extraction started for session='{session_id}'")
-        # Use asyncio.to_thread() + asyncio.wait_for() for non-blocking execution
-        # with timeout protection → prevents server hang on pathological PDFs
         raw_figures: list[dict] = await asyncio.wait_for(
             asyncio.to_thread(
                 extract_figures,
@@ -205,7 +208,7 @@ async def get_figures(session_id: str | None = None) -> JSONResponse:
             detail="Figure extraction failed due to an internal error.",
         ) from exc
 
-    # ── 4.3 Empty result handling (edge case) ────────────────────────────────
+    # ── 5.3 Empty result handling ────────────────────────────────────────────
     if not raw_figures:
         logger.info(
             f"[{request_id}] no figures found in PDF (session='{session_id}')"
@@ -213,24 +216,22 @@ async def get_figures(session_id: str | None = None) -> JSONResponse:
         session["figures"] = []
         session["figures_version"] = _FIGURES_VERSION
         session["figures_timestamp"] = time.time()
-        # Empty result: include timing metadata
         return _build_response(
             session_id,
             [],
+            pdf_url=pdf_url,
             extraction_time=extraction_time,
             refinement_time=0.0,
         )
 
-    # ── 4.5 Figure count guard ──────────────────────────────────────────────
+    # ── 5.5 Figure count guard ──────────────────────────────────────────────
     if len(raw_figures) > _FIGURE_COUNT_WARNING_THRESHOLD:
         logger.warning(
             f"[{request_id}] large figure count detected | session='{session_id}' | "
             f"count={len(raw_figures)}"
         )
 
-    # ── 5. Refine figures (caption cleaning, titles, scores) + LLM enrichment -
-    # Phase 7.4.1: Heuristic refinement (always runs)
-    # Phase 7.4.2: LLM enrichment (adds semantic understanding via Groq/Ollama)
+    # ── 6. Refine figures ────────────────────────────────────────────────────
     try:
         start_time = time.time()
         logger.info(f"[{request_id}] refinement started for {len(raw_figures)} figures")
@@ -249,7 +250,7 @@ async def get_figures(session_id: str | None = None) -> JSONResponse:
             detail="Figure refinement failed due to an internal error.",
         ) from exc
 
-    # ── 6. Response size guard (prevent UI crash + payload explosion) ─────────
+    # ── 7. Response size guard ───────────────────────────────────────────────
     original_count = len(refined_figures)
     if len(refined_figures) > _RESPONSE_SIZE_LIMIT:
         logger.warning(
@@ -258,28 +259,27 @@ async def get_figures(session_id: str | None = None) -> JSONResponse:
         )
         refined_figures = refined_figures[:_RESPONSE_SIZE_LIMIT]
 
-    # ── 6.5 Sort figures by page + numeric ID for consistent UI order ────────
+    # ── 7.5 Sort by page + numeric ID ───────────────────────────────────────
     refined_figures.sort(
         key=lambda x: (x.get("page", 0), _extract_figure_number(x.get("id") or ""))
     )
 
-    # ── 6.7 Cache refined result with version and timestamp ─────────────────
+    # ── 7.7 Cache ────────────────────────────────────────────────────────────
     session["figures"] = refined_figures
     session["figures_version"] = _FIGURES_VERSION
-    session["figures_timestamp"] = time.time()  # TTL for future cache invalidation
+    session["figures_timestamp"] = time.time()
 
-    # ── 6.9 Total processing time log + metadata ─────────────────────────────
     total_time = extraction_time + refinement_time
     logger.info(
         f"[{request_id}] processing complete | total_time={total_time:.2f}s | "
         f"session='{session_id}' | extracted={len(raw_figures)} | refined={original_count}"
     )
 
-    # ── 7. Respond ───────────────────────────────────────────────────────────
-    logger.info(f"[{request_id}] sending response for session='{session_id}'")
+    # ── 8. Respond ───────────────────────────────────────────────────────────
     return _build_response(
         session_id,
         refined_figures,
+        pdf_url=pdf_url,
         extraction_time=extraction_time,
         refinement_time=refinement_time,
         total_time=total_time,
@@ -290,23 +290,45 @@ async def get_figures(session_id: str | None = None) -> JSONResponse:
 # Private helpers
 # ---------------------------------------------------------------------------
 
+def _path_to_url(pdf_path: str) -> str:
+    """
+    Convert a server filesystem path to a browser-accessible URL path.
+
+    Handles two common storage conventions:
+      "static/papers/abc.pdf"  →  "/static/papers/abc.pdf"
+      "/static/papers/abc.pdf" →  "/static/papers/abc.pdf"  (already absolute)
+
+    This is intentionally simple: FastAPI mounts the static directory at
+    "/static", and paths are stored relative to the project root.
+
+    Args:
+        pdf_path: Filesystem path as stored in the session.
+
+    Returns:
+        URL path string starting with "/".
+    """
+    if not pdf_path:
+        return ""
+    # Already a URL-style absolute path — return as-is.
+    if pdf_path.startswith("/"):
+        return pdf_path
+    # Relative path — prefix with "/" so the browser can fetch it.
+    return f"/{pdf_path}"
+
+
 def _extract_figure_number(fig_id: str) -> int:
     """
     Extract numeric value from figure ID for correct sorting.
     E.g., "Fig. 10" → 10, "Figure 2" → 2, "unknown" → 0.
-
-    Args:
-        fig_id: Figure identifier string.
-
-    Returns:
-        Extracted number or 0 if no number found.
     """
     match = re.search(r"\d+", fig_id or "")
     return int(match.group()) if match else 0
 
+
 def _build_response(
     session_id: str,
     figures: list[dict],
+    pdf_url: str = "",
     extraction_time: float | None = None,
     refinement_time: float | None = None,
     total_time: float | None = None,
@@ -317,17 +339,21 @@ def _build_response(
     produce identical output shapes.
 
     Args:
-        session_id:     Active session identifier.
-        figures:        Refined figure list to serialise.
+        session_id:      Active session identifier.
+        figures:         Refined figure list to serialise.
+        pdf_url:         Browser-accessible URL for the source PDF (e.g.
+                         "/static/papers/paper.pdf"). Included in the envelope
+                         so the frontend can build page-anchored PDF links
+                         (``pdf_url + "#page=" + figure.page``) without
+                         hardcoding paths.
         extraction_time: Time spent extracting figures (optional).
         refinement_time: Time spent refining figures (optional).
         total_time:      Total processing time (optional).
 
     Returns:
         200 JSONResponse with ``session_id``, ``total_figures``, ``version``,
-        ``metadata``, and ``figures``.
+        ``pdf_url``, optional ``metadata``, and ``figures``.
     """
-    # Build metadata if timing info is available
     metadata = None
     if extraction_time is not None or refinement_time is not None or total_time is not None:
         metadata = {}
@@ -338,14 +364,16 @@ def _build_response(
         if total_time is not None:
             metadata["total_time"] = round(total_time, 4)
 
-    response_content = {
+    response_content: dict = {
         "session_id":    session_id,
         "total_figures": len(figures),
         "version":       _FIGURES_VERSION,
+        # ── Phase 7.5.2: expose the source PDF URL so the frontend can build
+        # page-anchored navigation links (window.open(pdf_url + "#page=N")).
+        "pdf_url":       pdf_url,
         "figures":       figures,
     }
 
-    # Include metadata only if available (for fresh extractions, not cache hits)
     if metadata:
         response_content["metadata"] = metadata
 

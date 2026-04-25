@@ -61,3 +61,35 @@ research-explorer.html
 backend/static/
 
 backend/app/services/llm/demo.py
+
+# 🔥 Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 🔥 Virtual Environment
+venv/
+venv311/
+backend/venv311/
+
+# 🔥 Environment variables
+.env
+
+# 🔥 Node
+node_modules/
+frontend/node_modules/
+
+# 🔥 Build files
+dist/
+build/
+
+# 🔥 Logs
+*.log
+
+# 🔥 OS files
+.DS_Store
+Thumbs.db
+
+# 🔥 VS Code
+.vscode/
