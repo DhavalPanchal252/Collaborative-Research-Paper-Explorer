@@ -6,10 +6,6 @@ export default defineConfig({
 
   server: {
     port: 5173,
-    proxy: {
-      "/api":  { target: "http://localhost:8000", changeOrigin: true },
-      "/chat": { target: "http://localhost:8000", changeOrigin: true },
-    },
   },
 
   build: {
@@ -18,17 +14,14 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          // React core (rarely changes → great for caching)
           if (id.includes("react") || id.includes("react-dom")) {
             return "vendor-react";
           }
 
-          // PDF.js (very heavy)
           if (id.includes("pdfjs-dist")) {
             return "vendor-pdfjs";
           }
 
-          // Graph libraries (only for citation view)
           if (
             id.includes("react-force-graph-2d") ||
             id.includes("d3-force") ||
@@ -37,7 +30,6 @@ export default defineConfig({
             return "vendor-graph";
           }
 
-          // Everything else from node_modules
           if (id.includes("node_modules")) {
             return "vendor-misc";
           }
